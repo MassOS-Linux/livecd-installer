@@ -60,6 +60,7 @@ curl -L https://raw.githubusercontent.com/limine-bootloader/limine/v2.78.2-binar
 # Extract rootfs.
 echo "Extracting rootfs..."
 tar -xpf "$1" -C iso-workdir/massos-rootfs
+ver="$(cat iso-workdir/massos-rootfs/etc/massos-release)"
 # Prepare the live system.
 echo "Preparing the live system..."
 chroot iso-workdir/massos-rootfs /usr/sbin/groupadd -r autologin
@@ -133,7 +134,7 @@ umount iso-workdir/efitmp
 # Copy additional files.
 cp livecd-files/autorun.ico iso-workdir/iso-root/autorun.ico
 cp livecd-files/autorun.inf iso-workdir/iso-root/autorun.inf
-cp livecd-files/README.txt iso-workdir/iso-root/README.txts
+cp livecd-files/README.txt iso-workdir/iso-root/README.txt
 cp LICENSE iso-workdir/iso-root/LICENSE.txt
 cp iso-workdir/syslinux/COPYING iso-workdir/iso-root/isolinux/LICENSE-ISOLINUX.txt
 # Create the ISO image.
