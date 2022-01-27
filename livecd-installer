@@ -1,0 +1,1744 @@
+#!/bin/bash
+
+# MassOS Installation Program - Copyright (C) 2022 MassOS Developers.
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Invocation and header.
+inv="$(basename "$0")"
+head="MassOS Installation Program - Copyright (C) 2022 MassOS Developers."
+installation_stage=0
+
+# Exit with error function.
+die() {
+  echo "Error: $*" >&2
+  rm -f "$response"
+  exit 1
+}
+
+# Ensure we are running as root.
+if [ $EUID -ne 0 ]; then
+  die "$inv must be run as root."
+fi
+
+# Check dependencies.
+which dialog &>/dev/null || die "$inv depends on 'dialog' in order to run."
+
+# Ensure we are running in the MassOS Live CD.
+if [ ! -d /run/initramfs/live ]; then
+  die "The MassOS Installation Program must be run from the MassOS Live CD."
+fi
+
+# Unmount anything from previous runs.
+umount -R /tmp/massos-installermnt* &>/dev/null || true
+umount -R /tmp/massos-installersqu* &>/dev/null || true
+
+# Setup working directories and files.
+response="/tmp/massos-installer$(date "+%Y%m%d%H%M%S")"
+logfile="/tmp/massos-installerlog$(date "+%Y%m%d%H%M%S")"
+mountdir="/tmp/massos-installermnt$(date "+%Y%m%d%H%M%S")"
+# Make disk and partitions global variables and clear them if set on the host.
+export disk="" rootpar="" efipar="" swappar="" grub_args=""
+
+# Check for a UEFI system.
+if [ -e /sys/firmware/efi/systab ]; then
+  export efisys="y"
+else
+  export efisys="n"
+fi
+
+# Menu functions.
+menu() {
+  rm -f "$response"
+  local title="$1"
+  local menu="$2"
+  shift 2
+  dialog --backtitle "$head" --title "$title" --menu "$menu" 7 72 0 \
+  "$@" 2>"$response"
+  return $?
+}
+forcemenu() {
+  rm -f "$response"
+  local title="$1"
+  local menu="$2"
+  shift 2
+  dialog --no-cancel --backtitle "$head" --title "$title" --menu "$menu" 7 72 0 \
+  "$@" 2>"$response"
+  return $?
+}
+message() {
+  dialog --backtitle "$head" --title "$1" --msgbox "$2" 7 60
+  return $?
+}
+prompt() {
+  dialog --backtitle "$head" --title "$1" --yesno "$2" 7 60
+  return $?
+}
+input() {
+  rm -f "$response"
+  dialog --backtitle "$head" --title "$1" --inputbox "$2" 7 60 2>"$response"
+  return $?
+}
+password() {
+  rm -f "$response"
+  dialog --backtitle "$head" --title "$1" --insecure --passwordbox "$2" \
+  7 60 2>"$response"
+  return $?
+}
+
+# Check for a UEFI system.
+if [ -e /sys/firmware/efi/systab ]; then
+  efisys="y"
+else
+  efisys="n"
+fi
+
+# Format function.
+format() {
+  case "$2" in
+    ext4) mkfs.ext4 -FL "$3" "$1" ;;
+    ext3) mkfs.ext3 -FL "$3" "$1" ;;
+    ext2) mkfs.ext2 -FL "$3" "$1" ;;
+    btrfs) mkfs.btrfs -fL "$3" "$1" ;;
+    xfs) mkfs.xfs -fL "$3" "$1" ;;
+    swap) mkswap "$1" ;;
+    vfat) mkfs.fat -F32 -n "$3" "$1" ;;
+    ntfs) mkntfs -QL "$3" "$1" ;;
+    exfat) mkfs.exfat -L "$3" "$1" ;;
+  esac
+  return $?
+}
+
+# Main menu.
+main_menu() {
+  menu "Main Menu" "Welcome to MassOS! What would you like to do?" \
+  "Install" "Install MassOS onto a disk or partition." \
+  "Reboot" "Reboot your computer now." \
+  "Shutdown" "Shut down your computer now." \
+  "About" "Information about MassOS Installation Program."
+  if [ $? -ne 0 ]; then
+    exit 1
+  fi
+  case "$(cat $response)" in
+    Install) installation ;;
+    Reboot) systemctl reboot ;;
+    Shutdown) systemctl poweroff ;;
+    About) about ;;
+  esac
+}
+
+about() {
+  message "About" "This is a dialog-based guided installer for MassOS. \
+  Copyright (C) 2022 The Sonic Master - Licensed under GNU GPLv3+ \
+  (see /usr/share/massos/LICENSE)."
+  main_menu
+}
+
+installation() {
+  case "$installation_stage" in
+    0) disk_setup ;;
+    1) begin_installation ;;
+    2) locale_setup ;;
+    3) root_password ;;
+    4) user_setup ;;
+    5) initramfs ;;
+    6) bootloader_setup ;;
+  esac
+}
+
+disk_setup() {
+  local disks="$(ls /sys/block | sed '/loop/d' | sed '/dm-/d' | sed '/sr/d')"
+  local diskdesc
+  local disksize
+  local entries
+  if [ -z "$disks" ]; then
+    message "Error" "No disks were found on your system. Cannot continue."
+    main_menu
+    exit
+  fi
+  for i in $disks; do
+    diskdesc="$(cat /sys/block/$i/device/model | xargs | sed 's/ /_/g')"
+    disksize="$(($(cat /sys/block/$i/size) * 512 / 1073741824))GiB"
+    entries+=" /dev/$i $disksize:$diskdesc"
+  done
+  menu "Disk Setup" "Please select the disk to partition for MassOS:" $entries
+  if [ $? -ne 0 ]; then
+    main_menu
+    exit
+  fi
+  disk="$(cat $response)"
+  partition_topmenu
+}
+
+partition_topmenu() {
+  # Swapoff any swap partitions.
+  swapoff "$disk*" &>/dev/null || true
+  # Check if it has any mounted partitions.
+  mount | grep -q "$disk"
+  if [ $? -eq 0 ]; then
+    prompt "Mounted Partitions" "The selected disk has mounted partitions. \
+    in order to work on it, all partitions must be unmounted. Do you want \
+    me to try and unmount them for you?"
+    if [ $? -ne 0 ]; then
+      disk_setup
+      exit
+    fi
+    # Try to unmount the partitions.
+    umount "$disk*" &>/dev/null
+    # Check if they are still mounted.
+    mount | grep -q "$disk"
+    if [ $? -eq 0 ]; then
+      message "Error" "Failed to unmount all partitions on the disk. Please \
+      unmount them manually, or select another disk to use for installation."
+      disk_setup
+      exit
+    fi
+  fi
+  menu "Partitioning" "Please select a partitioning method for $disk:" \
+  "1" "Erase the disk and install MassOS." \
+  "2" "Install MassOS to an existing partition (for dual-booting)." \
+  "3" "Manually create/modify partitions before installing."
+  if [ $? -ne 0 ]; then
+    disk_setup
+    exit
+  fi
+  case "$(cat $response)" in
+    1) erase_and_install ;;
+    2) install_existing ;;
+    3) manual_partitioning ;;
+  esac
+}
+
+erase_and_install() {
+  local root_fs
+  local swapchoice
+  menu "Erase Disk" "Please select the filesystem for the root partition:" \
+  "ext4" "4th Extended Linux Filesystem (RECOMMENDED)." \
+  "ext3" "3rd Extended Linux Filesystem." \
+  "ext2" "2nd Extended Linux Filesystem." \
+  "btrfs" "Oracle B-Tree Filesystem." \
+  "xfs" "Silicon Graphics XFS."
+  if [ $? -ne 0 ]; then
+    partition_topmenu
+    exit
+  fi
+  root_fs="$(cat $response)"
+  prompt "Erase Disk" "Swap is a reserved area on the disk which can be used \
+  to prevent the system from crashing if it runs out of memory. Would you \
+  like to add a swap partition?"
+  if [ $? -ne 0 ]; then
+    swapchoice="n"
+  else
+    swapchoice="y"
+  fi
+  # Final warning.
+  prompt "Erase Disk" "WARNING: Any existing data on $disk will be erased. \
+  This is irreversable. Continue?"
+  if [ $? -ne 0 ]; then
+    partition_topmenu
+    exit
+  fi
+  # Erase existing partition table.
+  sgdisk -Z "$disk" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to erase the disk. A log can be found at $logfile."
+    partition_topmenu
+    exit
+  fi
+  # Create partitions.
+  if [ "$efisys" = "y" ]; then
+    if [ "$swapchoice" = "y" ]; then
+      operations='g\nn\n\n\n+200M\nt\n1\nn\n\n\n-2G\nn\n\n\n\nt\n3\n19\nw\n'
+    else
+      operations='g\nn\n\n\n+200M\nt\n1\nn\n\n\n\nw\n'
+    fi
+  else
+    if [ "$swapchoice" = "y" ]; then
+      operations='o\nn\n\n\n\n-2G\nn\n\n\n\n\nt\n2\n82\nw\n'
+    else
+      operations='o\nn\n\n\n\n\nw\n'
+    fi
+  fi
+  echo -e "$operations" | fdisk "$disk" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to partition the disk. A log can be found at $logfile."
+    disk_setup
+    exit
+  fi
+  # Set up partition variables for later use.
+  if [ "$efisys" = "y" ]; then
+    efipar="$(lsblk -lnp "$disk" | grep part | cut -d' ' -f1 | head -n1)"
+    rootpar="$(lsblk -lnp "$disk" | grep part | cut -d' ' -f1 | head -n2 | tail -n1)"
+  else
+    rootpar="$(lsblk -lnp "$disk" | grep part | cut -d' ' -f1 | head -n1)"
+  fi
+  if [ "$swapchoice" = "y" ]; then
+    swappar="$(lsblk -lnp "$disk" | grep part | cut -d' ' -f1 | tail -n1)"
+  fi
+  # Format partitions.
+  format "$rootpar" "$root_fs" "MassOS" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to format the root partition. A log can be found at $logfile."
+    disk_setup
+    exit
+  fi
+  if [ "$efisys" = "y" ]; then
+    format "$efipar" vfat "EFI SYSTEM" &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to format the EFI system partition. A log can be found at $logfile."
+      disk_setup
+      exit
+    fi
+  fi
+  if [ "$swapchoice" = "y" ]; then
+    format "$swappar" swap &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to format the swap partition. A log can be found at $logfile."
+      disk_setup
+      exit
+    fi
+  fi
+  # Mount the partitions ready for installation.
+  mount_partitions
+}
+
+install_existing() {
+  local entries partsize partfs partlabel root_fs form_efi
+  # Get information for all partitions.
+  for i in $(lsblk -lnp "$disk" | grep part | cut -d' ' -f1); do
+    partsize="$(lsblk -lnp "$i" | xargs | cut -d' ' -f4)"
+    partfs="$(blkid -o value -s TYPE "$i")"
+    partlabel="$(blkid -o value -s LABEL "$i")"
+    if [ ! "$partfs" ]; then
+      partfs="unknown"
+    fi
+    if [ ! "$partlabel" ]; then
+      partlabel="NO_LABEL"
+    else
+      partlabel="$(echo $partlabel | sed 's/ /_/g')"
+    fi
+    entries+=" $i $partsize:$partfs:$partlabel"
+  done
+  if [ -z "$entries" ]; then
+    message "Error" "No partitions were found on the specified disk."
+    partition_topmenu
+    exit
+  fi
+  # List partitions.
+  menu "Partition Setup" "Please select the partition to use for the root \
+  filesystem:" $entries
+  if [ $? -ne 0 ]; then
+    partition_topmenu
+    exit
+  fi
+  rootpar="$(cat $response)"
+  menu "Partition Setup" "Please select the filesystem for root partition:" \
+  "ext4" "4th Extended Linux Filesystem (RECOMMENDED)." \
+  "ext3" "3rd Extended Linux Filesystem." \
+  "ext2" "2nd Extended Linux Filesystem." \
+  "btrfs" "Oracle B-Tree Filesystem." \
+  "xfs" "Silicon Graphics XFS."
+  if [ $? -ne 0 ]; then
+    install_existing
+    exit
+  fi
+  root_fs="$(cat $response)"
+  # EFI system.
+  if [ "$efisys" = "y" ]; then
+    menu "Partition Setup" "We also need a small EFI system partition to \
+    install the bootloader files. It should be a FAT32 (vfat) partition. If \
+    it is being used by another operating system, it can be shared with \
+    MassOS without needing to be re-formatted. Please select the desired \
+    partition:" $entries
+    if [ $? -ne 0 ]; then
+      partition_topmenu
+      exit
+    fi
+    if [ "$(cat $response)" = "$rootpar" ]; then
+      message "Error" "The EFI system partition must not be the same as the \
+      root partition."
+      install_existing
+      exit
+    fi
+    if [ "$(blkid -o value -s TYPE "$(cat $response)")" != "vfat" ]; then
+      message "Partition Setup" "It looks like this partition isn't FAT32. \
+      Would you like me to automatically format it for you?"
+      if [ $? -ne 0 ]; then
+        partition_topmenu
+        exit
+      else
+        form_efi="y"
+      fi
+    fi
+    efipar="$(cat $response)"
+  fi
+  # Swap choice.
+  prompt "Partition Setup" "Swap is a reserved area on the disk which can be \
+  used to prevent the system from crashing if it runs out of memory. Would \
+  you like to add a swap partition?"
+  if [ $? -eq 0 ]; then
+    menu "Partition Setup" "Please select the partition to use as swap (must \
+    differ from the root partition):" $entries
+    if [ $? -ne 0 ]; then
+      install_existing
+      exit
+    fi
+    if [ "$(cat $response)" = "$rootpar" ]; then
+      message "Error" "The swap partition must not be the same as the root \
+      partition."
+      install_existing
+      exit
+    fi
+    swappar="$(cat $response)"
+  fi
+  # Format partitions.
+  format "$rootpar" "$root_fs" "MassOS" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to format the root partition. A log can be found at $logfile."
+    disk_setup
+    exit
+  fi
+  if [ "$efisys" = "y" ]; then
+    format "$efipar" vfat "EFI SYSTEM" &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to format the EFI system partition. A log can be found at $logfile."
+      disk_setup
+      exit
+    fi
+  fi
+  if [ "$swapchoice" = "y" ]; then
+    format "$swappar" swap &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to format the swap partition. A log can be found at $logfile."
+      disk_setup
+      exit
+    fi
+  fi
+  mount_partitions
+}
+
+manual_partitioning() {
+  local partutil
+  menu "Partition Setup" "Please choose which utility you want to use for \
+  manual partitioning:" \
+  "cfdisk" "Curses-fdisk (Easiest)." \
+  "fdisk" "Standard fdisk." \
+  "parted" "GNU Parted."
+  if [ $? -ne 0 ]; then
+    partition_topmenu
+    exit
+  fi
+  partutil="$(cat $response)"
+  message "$partutil will now be executed. When you've finished partitioning, \
+  exit $partutil and the installation will continue."
+  clear
+  "$partutil" "$disk"
+  partition_topmenu
+}
+
+mount_partitions() {
+  mkdir -p "$mountdir"
+  mount -v "$rootpar" "$mountdir" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to mount the root partition. A log file can be found at $logfile."
+    disk_setup
+    exit
+  fi
+  if [ "$efisys" = "y" ]; then
+    mkdir -p "$mountdir"/boot/efi
+    mount -v "$efipar" "$mountdir"/boot/efi &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to mount the EFI system partition. A log file can be found at $logfile."
+      disk_setup
+      exit
+    fi
+  fi
+  if [ "$swappar" ]; then
+    swapon -v "$swappar" &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to swapon the swap partition. A log file can be found at $logfile."
+      disk_setup
+      exit
+    fi
+  fi
+  installation_stage=1
+  begin_installation
+}
+
+begin_installation() {
+  # Unsquash filesystem to target partition, pipe progress bar to dialog.
+  unsquashfs -f -q -d "$mountdir" /run/initramfs/live/LiveOS/squashfs.img |
+  dialog --backtitle "$head" --title "Installation" --progressbox "Installing \
+  MassOS, please be patient..." 5 78
+  sync
+  # Remove live system features.
+  userdel -R "$mountdir" -rf massos &>>"$logfile"
+  groupdel -R "$mountdir" -f autologin &>>"$logfile"
+  mv "$mountdir"/etc/lightdm/lightdm.conf.orig "$mountdir"/etc/lightdm/lightdm.conf
+  rm -f "$mountdir"/etc/polkit-1/rules.d/49-live.rules
+  rm -f "$mountdir"/etc/sudoers.d/live
+  rm -f "$mountdir"/usr/bin/livecd-installer
+  rm -f "$mountdir"/usr/share/applications/livecd-installer.desktop
+  # Generate '/etc/fstab'.
+  rootuuid="$(blkid -o value -s UUID "$rootpar")"
+  if [ "$efisys" = "y" ]; then
+    efiuuid="$(blkid -o value -s UUID "$efipar")"
+  fi
+  if [ "$swappar" ]; then
+    swapuuid="$(blkid -o value -s UUID "$swappar")"
+  fi
+  echo "# Automatically generated by MassOS installer." > "$mountdir"/etc/fstab
+  echo "UUID=$rootuuid / $(blkid -o value -s TYPE "$rootpar") defaults 1 1" >> "$mountdir"/etc/fstab
+  if [ "$efisys" = "y" ]; then
+    echo "UUID=$efiuuid /boot/efi vfat umask=0077 0 1" >> "$mountdir"/etc/fstab
+  fi
+  if [ "$swapuuid" ]; then
+    echo "UUID=$swapuuid swap swap pri=1 0 0" >> "$mountdir"/etc/fstab
+  fi
+  # Begin system configuration.
+  cp "$mountdir"/etc/locales "$mountdir"/etc/locales.backup
+  installation_stage=2
+  locale_setup
+}
+
+locale_setup() {
+  local selected_locale
+  cp "$mountdir"/etc/locales.backup "$mountdir"/etc/locales
+  # Set locale.
+  forcemenu "Locale Setup" "Please select your desired locale:" \
+  "en_US.UTF-8" "English (United States)" \
+  "en_GB.UTF-8" "English (Great Britain)" \
+  "fr_FR.UTF-8" "French (France)" \
+  "de_DE.UTF-8" "German (Germany)" \
+  "el_GR.UTF-8" "Greek (Greece)" \
+  "hu_HU.UTF-8" "Hungarian (Hungary)" \
+  "it_IT.UTF-8" "Italian (Italy)" \
+  "pl_PL.UTF-8" "Polish (Poland)" \
+  "pt_BR.UTF-8" "Portugese (Brazil)" \
+  "ro_RO.UTF-8" "Romanian (Romania)" \
+  "ru_RU.UTF-8" "Russian (Russia)" \
+  "es_ES.UTF-8" "Spanish (Spain)" \
+  "sv_SE.UTF-8" "Swedish (Sweden)" \
+  "other" "Other locale"
+  if [ $? -ne 0 ]; then
+    locale_setup
+    exit
+  fi
+  selected_locale="$(cat $response)"
+  if [ "$selected_locale" = "other" ]; then
+    menu "Locale Setup" "Please select your desired locale:" \
+    "en_US.UTF-8" "English (United States)" \
+    "aa_DJ.UTF-8" "Afar (Djibouti)" \
+    "af_ZA.UTF-8" "Afrikaans (South Africa)" \
+    "sq_AL.UTF-8" "Albanian (Albania)" \
+    "ar_DZ.UTF-8" "Arabic (Algeria)" \
+    "ar_BH.UTF-8" "Arabic (Bahrain)" \
+    "ar_EG.UTF-8" "Arabic (Egypt)" \
+    "ar_IQ.UTF-8" "Arabic (Iraq)" \
+    "ar_JO.UTF-8" "Arabic (Jordan)" \
+    "ar_KW.UTF-8" "Arabic (Kuwait)" \
+    "ar_LB.UTF-8" "Arabic (Lebanon)" \
+    "ar_LY.UTF-8" "Arabic (Libya)" \
+    "ar_MA.UTF-8" "Arabic (Morocco)" \
+    "ar_OM.UTF-8" "Arabic (Oman)" \
+    "ar_QA.UTF-8" "Arabic (Qatar)" \
+    "ar_SA.UTF-8" "Arabic (Saudi Arabia)" \
+    "ar_SD.UTF-8" "Arabic (Sudan)" \
+    "ar_SY.UTF-8" "Arabic (Syria)" \
+    "ar_TN.UTF-8" "Arabic (Tunisia)" \
+    "ar_AE.UTF-8" "Arabic (United Arab Emirates)" \
+    "ar_YE.UTF-8" "Arabic (Yemen)" \
+    "an_ES.UTF-8" "Aragonese (Spain)" \
+    "st_ZA.UTF-8" "Asturian (South Africa)" \
+    "ast_ES.UTF-8" "Asturian (Spain)" \
+    "eu_ES.UTF-8" "Basque (Spain)" \
+    "be_BY.UTF-8" "Belgian (Belarus)" \
+    "bhb_IN.UTF-8" "Bhili (India)" \
+    "bs_BA.UTF-8" "Bosnian (Bonsia and Herzegovina)" \
+    "br_FR.UTF-8" "Breton (France)" \
+    "bg_BG.UTF-8" "Bulgarian (Bulgaria)" \
+    "ca_AD.UTF-8" "Catalan (Andorra)" \
+    "ca_FR.UTF-8" "Catalan (France)" \
+    "ca_IT.UTF-8" "Catalan (Italy)" \
+    "ca_ES.UTF-8" "Catalan (Spain)" \
+    "zh_CN.UTF-8" "Chinese (China)" \
+    "zh_HK.UTF-8" "Chinese (Hong Kong)" \
+    "zh_SG.UTF-8" "Chinese (Singapore)" \
+    "zh_TW.UTF-8" "Chinese (Taiwan)" \
+    "kw_GB.UTF-8" "Cornish (Great Britain)" \
+    "hr_HR.UTF-8" "Croatian (Croatia)" \
+    "cs_CZ.UTF-8" "Czech (Czech Republic)" \
+    "da_DK.UTF-8" "Danish (Denmark)" \
+    "nl_BE.UTF-8" "Dutch (Belgium)"\
+    "nl_NL.UTF-8" "Dutch (Netherlands)" \
+    "en_AU.UTF-8" "English (Australia)" \
+    "en_BW.UTF-8" "English (Botswana)" \
+    "en_CA.UTF-8" "English (Canada)" \
+    "en_DK.UTF-8" "English (Denmark)" \
+    "en_GB.UTF-8" "English (Great Britain)" \
+    "en_HK.UTF-8" "English (Hong Kong)" \
+    "en_IE.UTF-8" "English (Ireland)" \
+    "en_NZ.UTF-8" "English (New Zealand)" \
+    "en_PH.UTF-8" "English (Philippines)" \
+    "en_SG.UTF-8" "English (Singapore)" \
+    "en_ZA.UTF-8" "English (South Africa)" \
+    "en_ZW.UTF-8" "English (Zimbabwe)" \
+    "et_EE.UTF-8" "Estonian (Estonia)" \
+    "fo_FO.UTF-8" "Faroese (Faroe Islands)" \
+    "fi_FI.UTF-8" "Finnish (Finland)" \
+    "fr_BE.UTF-8" "French (Belgium)" \
+    "fr_CA.UTF-8" "French (Canada)" \
+    "fr_CH.UTF-8" "French (Switzerland)" \
+    "fr_FR.UTF-8" "French (France)" \
+    "fr_LU.UTF-8" "French (Luxembourg)" \
+    "gl_ES.UTF-8" "Galician (Spain)" \
+    "lg_UG.UTF-8" "Ganda (Uganda)" \
+    "ka_GE.UTF-8" "Georgian (Georgia)" \
+    "de_AT.UTF-8" "German (Austria)" \
+    "de_BE.UTF-8" "German (Belgium)" \
+    "de_DE.UTF-8" "German (Germany)" \
+    "de_IT.UTF-8" "German (Italy)" \
+    "de_LU.UTF-8" "German (Luxembourg)" \
+    "de_CH.UTF-8" "German (Switzerland)" \
+    "el_CY.UTF-8" "Greek (Cyprus)" \
+    "el_GR.UTF-8" "Greek (Greece)" \
+    "he_IL.UTF-8" "Hebrew (Israel)" \
+    "hu_HU.UTF-8" "Hungarian (Hungary)" \
+    "is_IS.UTF-8" "Icelandic (Iceland)" \
+    "id_ID.UTF-8" "Indonesian (Indonesia)" \
+    "ga_IE.UTF-8" "Irish (Ireland)" \
+    "it_IT.UTF-8" "Italian (Italy)" \
+    "it_CH.UTF-8" "Italian (Switzerland)" \
+    "ja_JP.UTF-8" "Japanese (Japan)" \
+    "kl_GL.UTF-8" "Kalaallisut (Greenland)" \
+    "kk_KZ.UTF-8" "Kazakh (Kazakhstan)" \
+    "ko_KR.UTF-8" "Korean (Korea)" \
+    "ku_TR.UTF-8" "Kurdish (Turkey)" \
+    "lv_LV.UTF-8" "Latvian (Latvia)" \
+    "lt_LT.UTF-8" "Lithuanian (Lithuania)" \
+    "mk_MK.UTF-8" "Macedonian (Macedonia)" \
+    "mg_MG.UTF-8" "Malagasy (Madagascar)" \
+    "ms_MY.UTF-8" "Malay (Malaysia)" \
+    "mt_MT.UTF-8" "Maltese (Malta)" \
+    "gv_GB.UTF-8" "Manx (Great Britain)" \
+    "mi_NZ.UTF-8" "Maori (New Zealand)" \
+    "nb_NO.UTF-8" "Norwegian Bokmal (Norway)" \
+    "nn_NO.UTF-8" "Norwegian Nynorsk (Norway)" \
+    "oc_FR.UTF-8" "Occitan (France)" \
+    "om_KE.UTF-8" "Oromo (Kenya)" \
+    "pl_PL.UTF-8" "Polish (Poland)" \
+    "pt_BR.UTF-8" "Portugese (Brazil)" \
+    "pt_PT.UTF-8" "Portugese (Portugal)" \
+    "ro_RO.UTF-8" "Romanian (Romania)" \
+    "ru_RU.UTF-8" "Russian (Russia)" \
+    "ru_UA.UTF-8" "Russian (Ukraine)" \
+    "gd_GB.UTF-8" "Scottish Gaelic (Great Britain)" \
+    "sk_SK.UTF-8" "Slovak (Slovakia)" \
+    "sl_SI.UTF-8" "Slovenian (Slovenia)" \
+    "so_DJ.UTF-8" "Somali (Djibouti)" \
+    "so_KE.UTF-8" "Somali (Kenya)" \
+    "so_SO.UTF-8" "Somali (Somalia)" \
+    "es_AR.UTF-8" "Spanish (Argentina)" \
+    "es_BO.UTF-8" "Spanish (Bolivia)" \
+    "es_CL.UTF-8" "Spanish (Chile)" \
+    "es_CO.UTF-8" "Spanish (Colombia)" \
+    "es_CR.UTF-8" "Spanish (Costa Rica)" \
+    "es_DO.UTF-8" "Spanish (Dominican Republic)" \
+    "es_EC.UTF-8" "Spanish (Ecuador)" \
+    "es_SV.UTF-8" "Spanish (El Salvador)" \
+    "es_GT.UTF-8" "Spanish (Guatemala)" \
+    "es_HN.UTF-8" "Spanish (Honduras)" \
+    "es_MX.UTF-8" "Spanish (Mexico)" \
+    "es_NI.UTF-8" "Spanish (Nicaragua)" \
+    "es_PA.UTF-8" "Spanish (Panama)" \
+    "es_PY.UTF-8" "Spanish (Paraguay)" \
+    "es_PE.UTF-8" "Spanish (Peru)" \
+    "es_PR.UTF-8" "Spanish (Puerto Rico)" \
+    "es_ES.UTF-8" "Spanish (Spain)" \
+    "es_US.UTF-8" "Spanish (United States)" \
+    "es_UY.UTF-8" "Spanish (Uruguay)" \
+    "es_VE.UTF-8" "Spanish (Venezuela)" \
+    "sv_FI.UTF-8" "Swedish (Finland)" \
+    "sv_SE.UTF-8" "Swedish (Sweden)" \
+    "tl_PH.UTF-8" "Tagalog (Philippines)" \
+    "tg_TJ.UTF-8" "Tajik (Tajikistan)" \
+    "th_TH.UTF-8" "Thai (Thailand)" \
+    "tcy_IN.UTF-8" "Tulu (India)" \
+    "tr_CY.UTF-8" "Turkish (Cyprus)" \
+    "tr_TR.UTF-8" "Turkish (Turkey)" \
+    "uk_UA.UTF-8" "Ukrainian (Ukraine)" \
+    "hsb_DE.UTF-8" "Upper Sorbian (Germany)" \
+    "uz_UZ.UTF-8" "Uzbek (Uzbekistan)" \
+    "wa_BE.UTF-8" "Walloon (Belgium)" \
+    "cy_GB.UTF-8" "Welsh (Great Britain)" \
+    "xh_ZA.UTF-8" "Xhosa (South Africa)" \
+    "yi_US.UTF-8" "Yiddish (United States)" \
+    "zu_ZA.UTF-8" "Zulu (South Africa)"
+    if [ $? -ne 0 ]; then
+      locale_setup
+      exit
+    fi
+    selected_locale="$(cat $response)"
+  fi
+  if [ "$selected_locale" != "en_US.UTF-8" ]; then
+    # Uncomment the locale.
+    sed -i "s/#$selected_locale/$selected_locale/" "$mountdir"/etc/locales
+  fi
+  # Generate the locales.
+  chroot "$mountdir" /usr/sbin/mklocales | dialog --backtitle "$head" --title \
+  "Locale Setup" --progressbox "Generating locales..." 7 60
+  # Set keyboard layout.
+  kbd_setup
+}
+
+kbd_setup() {
+  local selected_kbd
+  forcemenu "Keyboard Layout" "Please select your desired keyboard layout:" \
+  "us" "English (United States)" \
+  "uk" "English (Great Britain)" \
+  "fr" "French" \
+  "de" "German" \
+  "el" "Greek" \
+  "hu" "Hungarian" \
+  "it" "Italian" \
+  "pl" "Polish" \
+  "pt" "Portuguese" \
+  "ro" "Romanian" \
+  "ru" "Russian" \
+  "es" "Spanish" \
+  "sv" "Swedish" \
+  "other" "Other keyboard layout"
+  if [ $? -ne 0 ]; then
+    kbd_setup
+    exit
+  fi
+  selected_kbd="$(cat $response)"
+  if [ "$selected_kbd" = "other" ]; then
+    menu "Keyboard Layout" "Please select your desired keyboard layout:" \
+    "ANSI-dvorak" "" \
+    "adnw" "" \
+    "amiga-de" "" \
+    "amiga-us" "" \
+    "apple-a1048-sv" "" \
+    "apple-a1243-sv" "" \
+    "apple-a1243-sv-fn-reverse" "" \
+    "apple-internal-0x0253-sv" "" \
+    "apple-internal-0x0253-sv-fn-reverse" "" \
+    "applkey" "" \
+    "atari-de" "" \
+    "atari-se" "" \
+    "atari-uk-falcon" "" \
+    "atari-us" "" \
+    "azerty" "" \
+    "backspace" "" \
+    "bashkir" "" \
+    "be-latin1" "" \
+    "bg-cp1251" "" \
+    "bg-cp855" "" \
+    "bg_bds-cp1251" "" \
+    "bg_bds-utf8" "" \
+    "bg_pho-cp1251" "" \
+    "bg_pho-utf8" "" \
+    "bone" "" \
+    "br-abnt" "" \
+    "br-abnt2" "" \
+    "br-latin1-abnt2" "" \
+    "br-latin1-us" "" \
+    "by" "" \
+    "by-cp1251" "" \
+    "bywin-cp1251" "" \
+    "ca" "" \
+    "carpalx" "" \
+    "carpalx-full" "" \
+    "cf" "" \
+    "croat" "" \
+    "ctrl" "" \
+    "cz" "" \
+    "cz-cp1250" "" \
+    "cz-lat2" "" \
+    "cz-lat2-prog" "" \
+    "cz-us-qwertz" "" \
+    "de" "" \
+    "de-latin1" "" \
+    "de-latin1-nodeadkeys" "" \
+    "de-mobii" "" \
+    "de_CH-latin1" "" \
+    "de_alt_UTF-8" "" \
+    "defkeymap" "" \
+    "defkeymap_V1.0" "" \
+    "dk" "" \
+    "dk-latin1" "" \
+    "dvorak" "" \
+    "dvorak-ca-fr" "" \
+    "dvorak-es" "" \
+    "dvorak-fr" "" \
+    "dvorak-l" "" \
+    "dvorak-la" "" \
+    "dvorak-no" "" \
+    "dvorak-programmer" "" \
+    "dvorak-r" "" \
+    "dvorak-ru" "" \
+    "dvorak-sv-a1" "" \
+    "dvorak-sv-a5" "" \
+    "dvorak-uk" "" \
+    "dvorak-ukp" "" \
+    "emacs" "" \
+    "emacs2" "" \
+    "en-latin9" "" \
+    "es" "" \
+    "es-cp850" "" \
+    "et" "" \
+    "et-nodeadkeys" "" \
+    "euro" "" \
+    "euro1" "" \
+    "euro2" "" \
+    "fa" "" \
+    "fi" "" \
+    "fr" "" \
+    "fr-bepo" "" \
+    "fr-bepo-latin9" "" \
+    "fr-latin1" "" \
+    "fr-latin9" "" \
+    "fr-pc" "" \
+    "fr_CH" "" \
+    "fr_CH-latin1" "" \
+    "gr" "" \
+    "gr-pc" "" \
+    "hu" "" \
+    "hu101" "" \
+    "il" "" \
+    "il-heb" "" \
+    "il-phonetic" "" \
+    "is-latin1" "" \
+    "is-latin1-us" "" \
+    "it" "" \
+    "it-ibm" "" \
+    "it2" "" \
+    "jp106" "" \
+    "kazakh" "" \
+    "keypad" "" \
+    "koy" "" \
+    "ky_alt_sh-UTF-8" "" \
+    "kyrgyz" "" \
+    "la-latin1" "" \
+    "lt" "" \
+    "lt.baltic" "" \
+    "lt.l4" "" \
+    "lv" "" \
+    "lv-tilde" "" \
+    "mac-be" "" \
+    "mac-de-latin1" "" \
+    "mac-de-latin1-nodeadkeys" "" \
+    "mac-de_CH" "" \
+    "mac-dk-latin1" "" \
+    "mac-dvorak" "" \
+    "mac-es" "" \
+    "mac-euro" "" \
+    "mac-euro2" "" \
+    "mac-fi-latin1" "" \
+    "mac-fr" "" \
+    "mac-fr_CH-latin1" "" \
+    "mac-it" "" \
+    "mac-no-latin1" "" \
+    "mac-pl" "" \
+    "mac-pt-latin1" "" \
+    "mac-se" "" \
+    "mac-template" "" \
+    "mac-uk" "" \
+    "mac-us" "" \
+    "mk" "" \
+    "mk-cp1251" "" \
+    "mk-utf" "" \
+    "mk0" "" \
+    "neo" "" \
+    "neoqwertz" "" \
+    "nl" "" \
+    "nl2" "" \
+    "no" "" \
+    "no-latin1" "" \
+    "pc110" "" \
+    "pl" "" \
+    "pl1" "" \
+    "pl2" "" \
+    "pl3" "" \
+    "pl4" "" \
+    "pt" "" \
+    "pt-latin1" "" \
+    "pt-latin9" "" \
+    "ro" "" \
+    "ro_std" "" \
+    "ro_win" "" \
+    "ru" "" \
+    "ru-cp1251" "" \
+    "ru-ms" "" \
+    "ru-yawerty" "" \
+    "ru1" "" \
+    "ru2" "" \
+    "ru3" "" \
+    "ru4" "" \
+    "ru_win" "" \
+    "ruwin_alt-CP1251" "" \
+    "ruwin_alt-KOI8-R" "" \
+    "ruwin_alt-UTF-8" "" \
+    "ruwin_alt_sh-UTF-8" "" \
+    "ruwin_cplk-CP1251" "" \
+    "ruwin_cplk-KOI8-R" "" \
+    "ruwin_cplk-UTF-8" "" \
+    "ruwin_ct_sh-CP1251" "" \
+    "ruwin_ct_sh-KOI8-R" "" \
+    "ruwin_ct_sh-UTF-8" "" \
+    "ruwin_ctrl-CP1251" "" \
+    "ruwin_ctrl-KOI8-R" "" \
+    "ruwin_ctrl-UTF-8" "" \
+    "se-fi-ir209" "" \
+    "se-fi-lat6" "" \
+    "se-ir209" "" \
+    "se-lat6" "" \
+    "sg" "" \
+    "sg-latin1" "" \
+    "sg-latin1-lk450" "" \
+    "sk-prog-qwerty" "" \
+    "sk-prog-qwertz" "" \
+    "sk-qwerty" "" \
+    "sk-qwertz" "" \
+    "slovene" "" \
+    "sr-cy" "" \
+    "sr-latin" "" \
+    "sun-pl" "" \
+    "sun-pl-altgraph" "" \
+    "sundvorak" "" \
+    "sunkeymap" "" \
+    "sunt4-es" "" \
+    "sunt4-fi-latin1" "" \
+    "sunt4-no-latin1" "" \
+    "sunt5-cz-us" "" \
+    "sunt5-de-latin1" "" \
+    "sunt5-es" "" \
+    "sunt5-fi-latin1" "" \
+    "sunt5-fr-latin1" "" \
+    "sunt5-ru" "" \
+    "sunt5-uk" "" \
+    "sunt5-us-cz" "" \
+    "sunt6-uk" "" \
+    "sv-latin1" "" \
+    "tj_alt-UTF8" "" \
+    "tr_f-latin5" "" \
+    "tr_q-latin5" "" \
+    "tralt" "" \
+    "trf" "" \
+    "trq" "" \
+    "ttwin_alt-UTF-8" "" \
+    "ttwin_cplk-UTF-8" "" \
+    "ttwin_ct_sh-UTF-8" "" \
+    "ttwin_ctrl-UTF-8" "" \
+    "ua" "" \
+    "ua-cp1251" "" \
+    "ua-utf" "" \
+    "ua-utf-ws" "" \
+    "ua-ws" "" \
+    "uk" "" \
+    "unicode" "" \
+    "us" "" \
+    "us-acentos" "" \
+    "us1" "" \
+    "wangbe" "" \
+    "wangbe2" "" \
+    "windowkeys" ""
+    if [ $? -ne 0 ]; then
+      kbd_setup
+      exit
+    fi
+    selected_kbd="$(cat $response)"
+  fi
+  echo "KEYMAP=$selected_kbd" > "$mountdir"/etc/vconsole.conf
+  tz_setup
+}
+
+tz_setup() {
+  local region city
+  forcemenu "Timezone Setup" "Please select your region:" \
+  "Africa" "" \
+  "America" "" \
+  "Antarctica" "" \
+  "Arctic" "" \
+  "Asia" "" \
+  "Atlantic" "" \
+  "Australia" "" \
+  "Europe" "" \
+  "Indian" "" \
+  "Pacific" ""
+  region="$(cat $response)"
+  if [ "$region" = "Africa" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Abidjan" "" \
+    "Accra" "" \
+    "Addis_Ababa" "" \
+    "Algiers" "" \
+    "Asmara" "" \
+    "Asmera" "" \
+    "Bamako" "" \
+    "Bangui" "" \
+    "Banjul" "" \
+    "Bissau" "" \
+    "Blantyre" "" \
+    "Brazzaville" "" \
+    "Bujumbura" "" \
+    "Cairo" "" \
+    "Casablanca" "" \
+    "Ceuta" "" \
+    "Conakry" "" \
+    "Dakar" "" \
+    "Dar_es_Salaam" "" \
+    "Djibouti" "" \
+    "Douala" "" \
+    "El_Aaiun" "" \
+    "Freetown" "" \
+    "Gaborone" "" \
+    "Harare" "" \
+    "Johannesburg" "" \
+    "Juba" "" \
+    "Kampala" "" \
+    "Khartoum" "" \
+    "Kigali" "" \
+    "Kinshasa" "" \
+    "Lagos" "" \
+    "Libreville" "" \
+    "Lome" "" \
+    "Luanda" "" \
+    "Lubumbashi" "" \
+    "Lusaka" "" \
+    "Malabo" "" \
+    "Maputo" "" \
+    "Maseru" "" \
+    "Mbabane" "" \
+    "Mogadishu" "" \
+    "Monrovia" "" \
+    "Nairobi" "" \
+    "Ndjamena" "" \
+    "Niamey" "" \
+    "Nouakchott" "" \
+    "Ouagadougou" "" \
+    "Porto-Novo" "" \
+    "Sao_Tome" "" \
+    "Timbuktu" "" \
+    "Tripoli" "" \
+    "Tunis" "" \
+    "Windhoek" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "America" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Adak" "" \
+    "Anchorage" "" \
+    "Anguilla" "" \
+    "Antigua" "" \
+    "Araguaina" "" \
+    "Argentina/Buenos_Aires" "" \
+    "Argentina/Catamarca" "" \
+    "Argentina/ComodRivadavia" "" \
+    "Argentina/Cordoba" "" \
+    "Argentina/Jujuy" "" \
+    "Argentina/La_Rioja" "" \
+    "Argentina/Mendoza" "" \
+    "Argentina/Rio_Gallegos" "" \
+    "Argentina/Salta" "" \
+    "Argentina/San_Juan" "" \
+    "Argentina/San_Luis" "" \
+    "Argentina/Tucuman" "" \
+    "Argentina/Ushuaia" "" \
+    "Aruba" "" \
+    "Asuncion" "" \
+    "Atikokan" "" \
+    "Atka" "" \
+    "Bahia" "" \
+    "Bahia_Banderas" "" \
+    "Barbados" "" \
+    "Belem" "" \
+    "Belize" "" \
+    "Blanc-Sablon" "" \
+    "Boa_Vista" "" \
+    "Bogota" "" \
+    "Boise" "" \
+    "Buenos_Aires" "" \
+    "Cambridge_Bay" "" \
+    "Campo_Grande" "" \
+    "Cancun" "" \
+    "Caracas" "" \
+    "Catamarca" "" \
+    "Cayenne" "" \
+    "Cayman" "" \
+    "Chicago" "" \
+    "Chihuahua" "" \
+    "Coral_Harbour" "" \
+    "Cordoba" "" \
+    "Costa_Rica" "" \
+    "Creston" "" \
+    "Cuiaba" "" \
+    "Curacao" "" \
+    "Danmarkshavn" "" \
+    "Dawson" "" \
+    "Dawson_Creek" "" \
+    "Denver" "" \
+    "Detroit" "" \
+    "Dominica" "" \
+    "Edmonton" "" \
+    "Eirunepe" "" \
+    "El_Salvador" "" \
+    "Ensenada" "" \
+    "Fortaleza" "" \
+    "Fort_Nelson" "" \
+    "Fort_Wayne" "" \
+    "Glace_Bay" "" \
+    "Godthab" "" \
+    "Goose_Bay" "" \
+    "Grand_Turk" "" \
+    "Grenada" "" \
+    "Guadeloupe" "" \
+    "Guatemala" "" \
+    "Guayaquil" "" \
+    "Guyana" "" \
+    "Halifax" "" \
+    "Havana" "" \
+    "Hermosillo" "" \
+    "Indiana/Indianapolis" "" \
+    "Indiana/Knox" "" \
+    "Indiana/Marengo" "" \
+    "Indiana/Petersburg" "" \
+    "Indiana/Tell_City" "" \
+    "Indiana/Vevay" "" \
+    "Indiana/Vincennes" "" \
+    "Indiana/Winamac" "" \
+    "Indianapolis" "" \
+    "Inuvik" "" \
+    "Iqaluit" "" \
+    "Jamaica" "" \
+    "Jujuy" "" \
+    "Juneau" "" \
+    "Kentucky/Louisville" "" \
+    "Kentucky/Monticello" "" \
+    "Knox_IN" "" \
+    "Kralendijk" "" \
+    "La_Paz" "" \
+    "Lima" "" \
+    "Los_Angeles" "" \
+    "Louisville" "" \
+    "Lower_Princes" "" \
+    "Maceio" "" \
+    "Managua" "" \
+    "Manaus" "" \
+    "Marigot" "" \
+    "Martinique" "" \
+    "Matamoros" "" \
+    "Mazatlan" "" \
+    "Mendoza" "" \
+    "Menominee" "" \
+    "Merida" "" \
+    "Metlakatla" "" \
+    "Mexico_City" "" \
+    "Miquelon" "" \
+    "Moncton" "" \
+    "Monterrey" "" \
+    "Montevideo" "" \
+    "Montreal" "" \
+    "Montserrat" "" \
+    "Nassau" "" \
+    "New_York" "" \
+    "Nipigon" "" \
+    "Nome" "" \
+    "Noronha" "" \
+    "North_Dakota/Beulah" "" \
+    "North_Dakota/Center" "" \
+    "North_Dakota/New_Salem" "" \
+    "Nuuk" "" \
+    "Ojinaga" "" \
+    "Panama" "" \
+    "Pangnirtung" "" \
+    "Paramaribo" "" \
+    "Phoenix" "" \
+    "Port-au-Prince" "" \
+    "Porto_Acre" "" \
+    "Port_of_Spain" "" \
+    "Porto_Velho" "" \
+    "Puerto_Rico" "" \
+    "Punta_Arenas" "" \
+    "Rainy_River" "" \
+    "Rankin_Inlet" "" \
+    "Recife" "" \
+    "Regina" "" \
+    "Resolute" "" \
+    "Rio_Branco" "" \
+    "Rosario" "" \
+    "Santa_Isabel" "" \
+    "Santarem" "" \
+    "Santiago" "" \
+    "Santo_Domingo" "" \
+    "Sao_Paulo" "" \
+    "Scoresbysund" "" \
+    "Shiprock" "" \
+    "Sitka" "" \
+    "St_Barthelemy" "" \
+    "St_Johns" "" \
+    "St_Kitts" "" \
+    "St_Lucia" "" \
+    "St_Thomas" "" \
+    "St_Vincent" "" \
+    "Swift_Current" "" \
+    "Tegucigalpa" "" \
+    "Thule" "" \
+    "Thunder_Bay" "" \
+    "Tijuana" "" \
+    "Toronto" "" \
+    "Tortola" "" \
+    "Vancouver" "" \
+    "Virgin" "" \
+    "Whitehorse" "" \
+    "Winnipeg" "" \
+    "Yakutat" "" \
+    "Yellowknife" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Antarctica" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Casey" "" \
+    "Davis" "" \
+    "DumontDUrville" "" \
+    "Macquarie" "" \
+    "Mawson" "" \
+    "McMurdo" "" \
+    "Palmer" "" \
+    "Rothera" "" \
+    "South_Pole" "" \
+    "Syowa" "" \
+    "Troll" "" \
+    "Vostok" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Arctic" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Longyearbyen" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Asia" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Aden" "" \
+    "Almaty" "" \
+    "Amman" "" \
+    "Anadyr" "" \
+    "Aqtau" "" \
+    "Aqtobe" "" \
+    "Ashgabat" "" \
+    "Ashkhabad" "" \
+    "Atyrau" "" \
+    "Baghdad" "" \
+    "Bahrain" "" \
+    "Baku" "" \
+    "Bangkok" "" \
+    "Barnaul" "" \
+    "Beirut" "" \
+    "Bishkek" "" \
+    "Brunei" "" \
+    "Calcutta" "" \
+    "Chita" "" \
+    "Choibalsan" "" \
+    "Chongqing" "" \
+    "Chungking" "" \
+    "Colombo" "" \
+    "Dacca" "" \
+    "Damascus" "" \
+    "Dhaka" "" \
+    "Dili" "" \
+    "Dubai" "" \
+    "Dushanbe" "" \
+    "Famagusta" "" \
+    "Gaza" "" \
+    "Harbin" "" \
+    "Hebron" "" \
+    "Ho_Chi_Minh" "" \
+    "Hong_Kong" "" \
+    "Hovd" "" \
+    "Irkutsk" "" \
+    "Istanbul" "" \
+    "Jakarta" "" \
+    "Jayapura" "" \
+    "Jerusalem" "" \
+    "Kabul" "" \
+    "Kamchatka" "" \
+    "Karachi" "" \
+    "Kashgar" "" \
+    "Kathmandu" "" \
+    "Katmandu" "" \
+    "Khandyga" "" \
+    "Kolkata" "" \
+    "Krasnoyarsk" "" \
+    "Kuala_Lumpur" "" \
+    "Kuching" "" \
+    "Kuwait" "" \
+    "Macao" "" \
+    "Macau" "" \
+    "Magadan" "" \
+    "Makassar" "" \
+    "Manila" "" \
+    "Muscat" "" \
+    "Nicosia" "" \
+    "Novokuznetsk" "" \
+    "Novosibirsk" "" \
+    "Omsk" "" \
+    "Oral" "" \
+    "Phnom_Penh" "" \
+    "Pontianak" "" \
+    "Pyongyang" "" \
+    "Qatar" "" \
+    "Qostanay" "" \
+    "Qyzylorda" "" \
+    "Rangoon" "" \
+    "Riyadh" "" \
+    "Saigon" "" \
+    "Sakhalin" "" \
+    "Samarkand" "" \
+    "Seoul" "" \
+    "Shanghai" "" \
+    "Singapore" "" \
+    "Srednekolymsk" "" \
+    "Taipei" "" \
+    "Tashkent" "" \
+    "Tbilisi" "" \
+    "Tehran" "" \
+    "Tel_Aviv" "" \
+    "Thimbu" "" \
+    "Thimphu" "" \
+    "Tokyo" "" \
+    "Tomsk" "" \
+    "Ujung_Pandang" "" \
+    "Ulaanbaatar" "" \
+    "Ulan_Bator" "" \
+    "Urumqi" "" \
+    "Ust-Nera" "" \
+    "Vientiane" "" \
+    "Vladivostok" "" \
+    "Yakutsk" "" \
+    "Yangon" "" \
+    "Yekaterinburg" "" \
+    "Yerevan" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Atlantic" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Azores" "" \
+    "Bermuda" "" \
+    "Canary" "" \
+    "Cape_Verde" "" \
+    "Faeroe" "" \
+    "Faroe" "" \
+    "Jan_Mayen" "" \
+    "Madeira" "" \
+    "Reykjavik" "" \
+    "South_Georgia" "" \
+    "Stanley" "" \
+    "St_Helena" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Australia" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "ACT" "" \
+    "Adelaide" "" \
+    "Brisbane" "" \
+    "Broken_Hill" "" \
+    "Canberra" "" \
+    "Currie" "" \
+    "Darwin" "" \
+    "Eucla" "" \
+    "Hobart" "" \
+    "LHI" "" \
+    "Lindeman" "" \
+    "Lord_Howe" "" \
+    "Melbourne" "" \
+    "North" "" \
+    "NSW" "" \
+    "Perth" "" \
+    "Queensland" "" \
+    "South" "" \
+    "Sydney" "" \
+    "Tasmania" "" \
+    "Victoria" "" \
+    "West" "" \
+    "Yancowinna" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Europe" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Amsterdam" "" \
+    "Andorra" "" \
+    "Astrakhan" "" \
+    "Athens" "" \
+    "Belfast" "" \
+    "Belgrade" "" \
+    "Berlin" "" \
+    "Bratislava" "" \
+    "Brussels" "" \
+    "Bucharest" "" \
+    "Budapest" "" \
+    "Busingen" "" \
+    "Chisinau" "" \
+    "Copenhagen" "" \
+    "Dublin" "" \
+    "Gibraltar" "" \
+    "Guernsey" "" \
+    "Helsinki" "" \
+    "Isle_of_Man" "" \
+    "Istanbul" "" \
+    "Jersey" "" \
+    "Kaliningrad" "" \
+    "Kiev" "" \
+    "Kirov" "" \
+    "Lisbon" "" \
+    "Ljubljana" "" \
+    "London" "" \
+    "Luxembourg" "" \
+    "Madrid" "" \
+    "Malta" "" \
+    "Mariehamn" "" \
+    "Minsk" "" \
+    "Monaco" "" \
+    "Moscow" "" \
+    "Nicosia" "" \
+    "Oslo" "" \
+    "Paris" "" \
+    "Podgorica" "" \
+    "Prague" "" \
+    "Riga" "" \
+    "Rome" "" \
+    "Samara" "" \
+    "San_Marino" "" \
+    "Sarajevo" "" \
+    "Saratov" "" \
+    "Simferopol" "" \
+    "Skopje" "" \
+    "Sofia" "" \
+    "Stockholm" "" \
+    "Tallinn" "" \
+    "Tirane" "" \
+    "Tiraspol" "" \
+    "Ulyanovsk" "" \
+    "Uzhgorod" "" \
+    "Vaduz" "" \
+    "Vatican" "" \
+    "Vienna" "" \
+    "Vilnius" "" \
+    "Volgograd" "" \
+    "Warsaw" "" \
+    "Zagreb" "" \
+    "Zaporozhye" "" \
+    "Zurich" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Indian" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Antananarivo" "" \
+    "Chagos" "" \
+    "Christmas" "" \
+    "Cocos" "" \
+    "Comoro" "" \
+    "Kerguelen" "" \
+    "Mahe" "" \
+    "Maldives" "" \
+    "Mauritius" "" \
+    "Mayotte" "" \
+    "Reunion" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  elif [ "$region" = "Pacific" ]; then
+    menu "Timezone Setup" "Please select your region:" \
+    "Apia" "" \
+    "Auckland" "" \
+    "Bougainville" "" \
+    "Chatham" "" \
+    "Chuuk" "" \
+    "Easter" "" \
+    "Efate" "" \
+    "Enderbury" "" \
+    "Fakaofo" "" \
+    "Fiji" "" \
+    "Funafuti" "" \
+    "Galapagos" "" \
+    "Gambier" "" \
+    "Guadalcanal" "" \
+    "Guam" "" \
+    "Honolulu" "" \
+    "Johnston" "" \
+    "Kanton" "" \
+    "Kiritimati" "" \
+    "Kosrae" "" \
+    "Kwajalein" "" \
+    "Majuro" "" \
+    "Marquesas" "" \
+    "Midway" "" \
+    "Nauru" "" \
+    "Niue" "" \
+    "Norfolk" "" \
+    "Noumea" "" \
+    "Pago_Pago" "" \
+    "Palau" "" \
+    "Pitcairn" "" \
+    "Pohnpei" "" \
+    "Ponape" "" \
+    "Port_Moresby" "" \
+    "Rarotonga" "" \
+    "Saipan" "" \
+    "Samoa" "" \
+    "Tahiti" "" \
+    "Tarawa" "" \
+    "Tongatapu" "" \
+    "Truk" "" \
+    "Wake" "" \
+    "Wallis" "" \
+    "Yap" ""
+    if [ $? -ne 0 ]; then
+      tz_setup
+      exit
+    fi
+    city="$(cat $response)"
+  fi
+  # Set the selected timezone.
+  ln -sf "/usr/share/zoneinfo/$region/$city" "$mountdir"/etc/localtime
+  # Set root password.
+  installation_stage=3
+  root_password
+}
+
+root_password() {
+  local passwd1 passwd2
+  # Set the root password.
+  password "Root Password" "Please enter a password for the root account:"
+  if [ $? -ne 0 ]; then
+    main_menu
+    exit
+  fi
+  passwd1="$(cat $response)"
+  if [ -z "$passwd1" ]; then
+    message "Error" "The password field must not be left blank."
+    root_password
+    exit
+  fi
+  # And again, to ensure it was typed correctly.
+  password "Root Password" "Please type the same password again to confirm:"
+  if [ $? -ne 0 ]; then
+    root_password
+    exit
+  fi
+  passwd2="$(cat $response)"
+  # Ensure the passwords match.
+  if [ "$passwd1" != "$passwd2" ]; then
+    message "Error" "Your passwords do not match. Please try again."
+    root_password
+    exit
+  fi
+  # Set the password.
+  echo "root:$passwd1" | chpasswd -R "$mountdir" -c SHA512 &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to set the root password. A log file can be found at $logfile."
+    main_menu
+    exit
+  fi
+  # Go to user setup.
+  installation_stage=4
+  user_setup
+}
+
+user_setup() {
+  local t uname fname userpwd1 userpwd2
+  # Information prompt.
+  message "User Setup" "We will now setup an administrator account for the \
+  main user of the system. This account will be an administrator. If desired, \
+  you can add additional users later by running the command 'sudo adduser' in \
+  a terminal."
+  # Username setup.
+  input "User Setup" "Please enter the username of the primary user:"
+  if [ $? -ne 0 ]; then
+    main_menu
+    exit
+  fi
+  t="$(cat $response)"
+  if [ -z "$t" ]; then
+    message "Error" "The username field must not be left blank."
+    user_setup
+    exit
+  fi
+  uname="$(echo "$t" | head -n1 | cut -d " " -f1 | tr '[:upper:]' '[:lower:]')"
+  # Full name setup.
+  input "User Setup" "Please enter the full name of the primary user:"
+  if [ $? -ne 0 ]; then
+    user_setup
+    exit
+  fi
+  fname="$(cat $response)"
+  if [ -z "$fname" ]; then
+    fname="$uname"
+  fi
+  # Enter the password for the user.
+  password "User Setup" "Please enter a new password for '$uname':"
+  if [ $? -ne 0 ]; then
+    user_setup
+    exit
+  fi
+  userpwd1="$(cat $response)"
+  if [ -z "$userpwd1" ]; then
+    message "Error" "The password field must not be left blank."
+    user_setup
+    exit
+  fi
+  # And again, to confirm.
+  password "User Setup" "Please type the same password again to confirm:"
+  if [ $? -ne 0 ]; then
+    user_setup
+    exit
+  fi
+  userpwd2="$(cat $response)"
+  # Ensure they are the same.
+  if [ "$userpwd1" != "$userpwd2" ]; then
+    message "Error" "The passwords do not match. Please try again."
+    user_setup
+    exit
+  fi
+  # Add the user.
+  useradd -R "$mountdir" -mc "$fname" -G wheel,netdev,lpadmin -s /bin/bash \
+  "$uname" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    userdel -R "$mountdir" -rf "$uname" &>/dev/null || true
+    message "Error" "Failed to create user. A log file can be found at $logfile."
+    main_menu
+    exit
+  fi
+  # Set the password.
+  echo "$uname:$userpwd1" | chpasswd -R "$mountdir" -c SHA512 &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    userdel -R "$mountdir" -rf "$uname" &>/dev/null || true
+    message "Error" "Failed to set user password. A log file can be found at $logfile."
+    main_menu
+    exit
+  fi
+  # Additional stuff stage.
+  installation_stage=5
+  initramfs
+}
+
+initramfs() {
+  dialog --backtitle "$head" --title "Initramfs" --infobox \
+  "Generating the initramfs, please be patient..." 4 60
+  chroot "$mountdir" /usr/sbin/mkinitramfs "$(ls /usr/lib/modules)" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to generate the initramfs. A log file can be found at $logfile."
+    main_menu
+    exit
+  fi
+  # Bootloader setup.
+  installation_stage=6
+  bootloader_setup
+}
+
+grub_run() {
+  cat > "$mountdir"/tmp/install-grubrun << "END"
+#!/bin/bash
+set -e
+echo "33"
+if [ "$efisys" = "y" ]; then
+  mountpoint -q /sys/firmware/efi/efivars || (mount -t efivarfs efivarfs /sys/firmware/efi/efivars && touch /tmp/beforemounted)
+fi
+/usr/sbin/grub-install $grub_args >&2
+echo "66"
+/usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg >&2
+echo "100"
+test ! -f /tmp/beforemounted || (umount /sys/firmware/efi/efivars && rm -f /tmp/beforemounted)
+END
+  chmod 755 "$mountdir"/tmp/install-grubrun
+  mass-chroot "$mountdir" /tmp/install-grubrun
+  if [ $? -ne 0 ]; then
+    echo "grub-run failed" >&2
+  fi
+  rm -f /tmp/install-grubrun
+}
+
+bootloader_setup() {
+  local installation_type
+  if [ "$efisys" = "y" ]; then
+    forcemenu "Bootloader" "Please specify how MassOS is being installed:" \
+    "Internal" "Installing to an internal hard drive or SSD." \
+    "External" "Installing to an external hard drive, SSD or USB flash drive."
+    if [ $? -ne 0 ]; then
+      bootloader_setup
+      exit
+    fi
+    installation_type="$(cat $response)"
+    if [ "$installation_type" = "External" ]; then
+      grub_args="--removable"
+    fi
+  else
+    grub_args="$disk"
+  fi
+  prompt "Bootloader" "Do you want the bootloader to detect other operating \
+  systems on your computer and allow them to be loaded from the boot menu? \
+  This is useful if you're dual-booting MassOS with another OS."
+  if [ $? -ne 0 ]; then
+    sed -i 's/GRUB_DISABLE_OS_PROBER="false"/#GRUB_DISABLE_OS_PROBER="false"/' \
+    "$mountdir"/etc/default/grub
+  fi
+  grub_run 2>>"$logfile" | dialog --backtitle "$head" --title "Bootloader" \
+  --gauge "Installing the GRUB bootloader..." 7 60
+  if [ "$(tail -n1 "$logfile")" = "grub-run failed" ]; then
+    message "Error" "Failed to install the bootloader. A log can be found at $logfile."
+    main_menu
+    exit
+  fi
+  # Finish setup.
+  finish_setup
+}
+
+finish_setup() {
+  # Unmount the filesystems.
+  umount -R "$mountdir"
+  # Finishing message.
+  message "Installation Complete" "The installation has finished successfully. \
+  Your system will now reboot. Please remember to eject the CD or unplug the \
+  USB drive."
+  systemctl reboot
+}
+
+# Run the main menu.
+main_menu

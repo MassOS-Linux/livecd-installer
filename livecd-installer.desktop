@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Install MassOS
+Type=Application
+Comment=Install MassOS onto your system
+Exec=pkexec livecd-installer
+Icon=/usr/share/massos/massos-logo.png
+Terminal=true
+Categories=System;Utility
+Path=
+StartupNotify=false
