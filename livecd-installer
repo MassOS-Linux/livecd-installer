@@ -250,12 +250,7 @@ erase_and_install() {
     exit
   fi
   # Erase existing partition table.
-  sgdisk -Z "$disk" &>>"$logfile"
-  if [ $? -ne 0 ]; then
-    message "Error" "Failed to erase the disk. A log can be found at $logfile."
-    partition_topmenu
-    exit
-  fi
+  sgdisk -Z "$disk" &>>"$logfile" || true
   # Create partitions.
   if [ "$efisys" = "y" ]; then
     if [ "$swapchoice" = "y" ]; then
