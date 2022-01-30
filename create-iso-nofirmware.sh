@@ -20,6 +20,7 @@ set -e
 # Ensure we are running as root.
 if [ $EUID -ne 0 ]; then
   echo "Error: $(basename "$0") must be run as root."
+  exit 1
 fi
 # Ensure dependencies are present.
 which curl &>/dev/null || (echo "Error: curl is required." >&2; exit 1)
