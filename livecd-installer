@@ -140,7 +140,7 @@ main_menu() {
 
 about() {
   message "About" "This is a dialog-based guided installer for MassOS. \
-  Copyright (C) 2022 The Sonic Master - Licensed under GNU GPLv3+ \
+  Copyright (C) 2022 MassOS Developers - Licensed under GNU GPLv3+ \
   (see /usr/share/massos/LICENSE)."
   main_menu
 }
@@ -309,7 +309,7 @@ erase_and_install() {
 }
 
 install_existing() {
-  local entries partsize partfs partlabel root_fs form_efi
+  local entries partsize partfs partlabel root_fs form_efi form_swap
   # Get information for all partitions.
   for i in $(lsblk -lnp "$disk" | grep part | cut -d' ' -f1); do
     partsize="$(lsblk -lnp "$i" | xargs | cut -d' ' -f4)"
@@ -370,7 +370,7 @@ install_existing() {
       message "Partition Setup" "It looks like this partition isn't FAT32. \
       Would you like me to automatically format it for you?"
       if [ $? -ne 0 ]; then
-        partition_topmenu
+        install_existing
         exit
       else
         form_efi="y"
@@ -395,7 +395,24 @@ install_existing() {
       install_existing
       exit
     fi
+    if [ "$(blkid -o value -s TYPE "$(cat $response)")" != "swap" ]; then
+      message "Partition Setup" "It looks like this partition isn't formatted \
+      for swap, would you like me to format it for you?"
+      if [ $? -ne 0 ]; then
+        install_existing
+        exit
+      else
+        form_swap="y"
+      fi
+    fi
     swappar="$(cat $response)"
+  fi
+  # Final warning.
+  prompt "Partition Setup" "WARNING: Selected partition(s) will be formatted, \
+  any existing data on it/them will be lost. Continue?"
+  if [ $? -ne 0 ]; then
+    install_existing
+    exit
   fi
   # Format partitions.
   format "$rootpar" "$root_fs" "MassOS" &>>"$logfile"
@@ -404,7 +421,7 @@ install_existing() {
     disk_setup
     exit
   fi
-  if [ "$efisys" = "y" ]; then
+  if [ "$form_efi" = "y" ]; then
     format "$efipar" vfat "EFI SYSTEM" &>>"$logfile"
     if [ $? -ne 0 ]; then
       message "Error" "Failed to format the EFI system partition. A log can be found at $logfile."
@@ -412,7 +429,7 @@ install_existing() {
       exit
     fi
   fi
-  if [ "$swapchoice" = "y" ]; then
+  if [ "$form_swap" = "y" ]; then
     format "$swappar" swap &>>"$logfile"
     if [ $? -ne 0 ]; then
       message "Error" "Failed to format the swap partition. A log can be found at $logfile."
@@ -435,8 +452,8 @@ manual_partitioning() {
     exit
   fi
   partutil="$(cat $response)"
-  message "$partutil will now be executed. When you've finished partitioning, \
-  exit $partutil and the installation will continue."
+  message "Partition Setup" "$partutil will now be executed. When you've \
+  finished partitioning, exit $partutil and the installation will continue."
   clear
   "$partutil" "$disk"
   partition_topmenu
