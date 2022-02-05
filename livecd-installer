@@ -49,7 +49,7 @@ response="/tmp/massos-installer$(date "+%Y%m%d%H%M%S")"
 logfile="/tmp/massos-installerlog$(date "+%Y%m%d%H%M%S")"
 mountdir="/tmp/massos-installermnt$(date "+%Y%m%d%H%M%S")"
 # Make disk and partitions global variables and clear them if set on the host.
-export disk="" rootpar="" efipar="" swappar="" grub_args=""
+export disk="" rdisk="" rootpar="" efipar="" swappar="" grub_args=""
 
 # Check for a UEFI system.
 if [ -e /sys/firmware/efi/systab ]; then
@@ -124,6 +124,7 @@ format() {
 main_menu() {
   menu "Main Menu" "Welcome to MassOS! What would you like to do?" \
   "Install" "Install MassOS onto a disk or partition." \
+  "Repair" "Repair a MassOS installation." \
   "Reboot" "Reboot your computer now." \
   "Shutdown" "Shut down your computer now." \
   "About" "Information about MassOS Installation Program."
@@ -132,6 +133,7 @@ main_menu() {
   fi
   case "$(cat $response)" in
     Install) installation ;;
+    Repair) repair_diskselect ;;
     Reboot) systemctl reboot ;;
     Shutdown) systemctl poweroff ;;
     About) about ;;
@@ -195,7 +197,8 @@ partition_topmenu() {
       exit
     fi
     # Try to unmount the partitions.
-    umount "$disk*" &>/dev/null
+    sync
+    umount -R "$disk*" &>/dev/null
     # Check if they are still mounted.
     mount | grep -q "$disk"
     if [ $? -eq 0 ]; then
@@ -1674,7 +1677,7 @@ user_setup() {
 initramfs() {
   dialog --backtitle "$head" --title "Initramfs" --infobox \
   "Generating the initramfs, please be patient..." 4 60
-  chroot "$mountdir" /usr/sbin/mkinitramfs "$(ls /usr/lib/modules)" &>>"$logfile"
+  mass-chroot "$mountdir" /usr/sbin/mkinitramfs "$(ls /usr/lib/modules)" &>>"$logfile"
   if [ $? -ne 0 ]; then
     message "Error" "Failed to generate the initramfs. A log file can be found at $logfile."
     main_menu
@@ -1750,6 +1753,162 @@ finish_setup() {
   Your system will now reboot. Please remember to eject the CD or unplug the \
   USB drive."
   systemctl reboot
+}
+
+repair_diskselect() {
+  local entries
+  # Detect available partitions
+  for i in $(ls /sys/block | sed '/loop/d' | sed '/dm-/d' | sed '/sr/d'); do
+    for j in $(lsblk -lnp "/dev/$i" | grep part | cut -d' ' -f1); do
+      partsize="$(lsblk -lnp "$j" | xargs | cut -d' ' -f4)"
+      partfs="$(blkid -o value -s TYPE "$j")"
+      partlabel="$(blkid -o value -s LABEL "$j")"
+      if [ ! "$partfs" ]; then
+        partfs="unknown"
+      fi
+      if [ ! "$partlabel" ]; then
+        partlabel="NO_LABEL"
+      else
+        partlabel="$(echo $partlabel | sed 's/ /_/g')"
+      fi
+      entries+=" $j $partsize:$partfs:$partlabel"
+    done
+  done
+  # Error if no partitions are found.
+  if [ -z "$entries" ]; then
+    message "Error" "No partitions were found on any disk. Nothing to repair."
+    main_menu
+    exit
+  fi
+  # Choose which partition containing the MassOS installation to repair.
+  menu "Repair Menu" "Please select the partition containing the installation \
+  you want to repair:" $entries
+  if [ $? -ne 0 ]; then
+    main_menu
+    exit
+  fi
+  rdisk="$(cat $response)"
+  # Ensure the partition is umounted.
+  mount | grep -q "$rdisk"
+  if [ $? -eq 0 ]; then
+    prompt "Mounted Partitions" "The selected partition is mounted. In order \
+    to work on it, it must be unmounted. Would you like me to try and unmount \
+    it for you?"
+    if [ $? -ne 0 ]; then
+      repair_diskselect
+      exit
+    fi
+    # Try to unmount the partitions.
+    sync
+    umount -R "$rdisk" &>/dev/null
+    # Check if they are still mounted.
+    mount | grep -q "$rdisk"
+    if [ $? -eq 0 ]; then
+      message "Error" "Failed to unmount the partition. Please unmount it \
+      manually, or select another disk to use for installation."
+      repair_diskselect
+      exit
+    fi
+  fi
+  repair_menu
+}
+
+repair_menu() {
+  menu "Repair Menu" "Please select a repair option:" \
+  "Refresh" "Reinstall the base system without wiping your data." \
+  "Shell" "Enter a root shell prompt in a chroot environment."
+  if [ $? -ne 0 ]; then
+    main_menu
+    exit
+  fi
+  case "$(cat $response)" in
+    Refresh) refresh ;;
+    Shell) enter_shell ;;
+  esac
+}
+
+refresh() {
+  prompt "Refresh" "Refreshing will reinstall the base system without wiping \
+  your apps or files. It can also be used to upgrade an installation. Are you \
+  sure you want to continue?"
+  if [ $? -ne 0 ]; then
+    repair_menu
+    exit
+  fi
+  # Mount the partition.
+  mkdir -p "$mountdir"
+  mount -v "$rdisk" "$mountdir" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to mount the root partition. A log file is at $logfile."
+    repair_menu
+    exit
+  fi
+  # Backup files in /etc if they exist.
+  if [ -d "$mountdir"/etc ]; then
+    bakdir="/tmp/massos-installerbak$(date "+%Y%m%d%H%M%S")"
+    mkdir -p "$bakdir"
+    cp -a "$mountdir"/etc "$bakdir"
+  fi
+  # Start the repair.
+  unsquashfs -f -ig -q -d "$mountdir" /run/initramfs/live/LiveOS/squashfs.img \
+  2>/dev/null | dialog --backtitle "$head" --title "Refresh" --progressbox \
+  "Refreshing your MassOS installation, please be patient..." 5 78
+  # Remove live system features.
+  userdel -R "$mountdir" -rf massos &>>"$logfile"
+  groupdel -R "$mountdir" -f autologin &>>"$logfile"
+  mv "$mountdir"/etc/lightdm/lightdm.conf.orig "$mountdir"/etc/lightdm/lightdm.conf
+  rm -f "$mountdir"/etc/polkit-1/rules.d/49-live.rules
+  rm -f "$mountdir"/etc/sudoers.d/live
+  rm -f "$mountdir"/usr/bin/livecd-installer
+  rm -f "$mountdir"/usr/share/applications/livecd-installer.desktop
+  # Restore /etc files, preserving new os-release files.
+  cp -a "$mountdir"/etc/{lsb-release,massos-release,os-release} "$bakdir"
+  cp -a "$bakdir"/etc "$mountdir"
+  cp -a "$bakdir"/{lsb-release,massos-release,os-release} "$mountdir"/etc
+  # Finishing steps.
+  dialog --backtitle "$head" --title "Refresh" --infobox "Running finishing \
+  steps, please be patient (this might take a few minutes)..." 4 60
+  if [ -e "$mountdir"/tmp/postupgrade ]; then
+    mass-chroot "$mountdir" /bin/bash /tmp/postupgrade &>>"$logfile"
+  fi
+  mass-chroot "$mountdir" /usr/sbin/ldconfig &>>"$logfile"
+  mass-chroot "$mountdir" /usr/sbin/mklocales &>>"$logfile"
+  mass-chroot "$mountdir" /usr/sbin/mkinitramfs &>>"$logfile"
+  mass-chroot "$mountdir" /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg &>>"$logfile"
+  # Finish
+  message "Refresh" "The refresh was successful. You may now reboot into your \
+  repaired or updated system."
+  sync
+  umount -R "$mountdir" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to unmount the partition. A log file is at $logfile."
+  fi
+  repair_menu
+}
+
+enter_shell() {
+  message "Shell" "A root shell will now be started in a chroot environment. \
+  When finished, type 'exit' to return here. Only the root partition will be \
+  mounted. You'll need to manually mount any other needed partitions."
+  # Mount the partition.
+  mkdir -p "$mountdir"
+  mount -v "$rdisk" "$mountdir" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to mount the root partition. A log file is at $logfile."
+    repair_menu
+    exit
+  fi
+  # Enter the chroot environment.
+  clear
+  mass-chroot "$mountdir"
+  read -p "Press ENTER to return to the installer... "
+  # Unmount the filesystem.
+  sync
+  umount -vR "$mountdir" &>>"$logfile"
+  if [ $? -ne 0 ]; then
+    message "Error" "Failed to unmount the partitions. A log file is at $logfile."
+  fi
+  repair_menu
 }
 
 # Run the main menu.
