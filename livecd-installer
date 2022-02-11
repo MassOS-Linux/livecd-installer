@@ -42,7 +42,6 @@ fi
 
 # Unmount anything from previous runs.
 umount -R /tmp/massos-installermnt* &>/dev/null || true
-umount -R /tmp/massos-installersqu* &>/dev/null || true
 
 # Setup working directories and files.
 response="/tmp/massos-installer$(date "+%Y%m%d%H%M%S")"
@@ -993,6 +992,10 @@ tz_setup() {
   "Europe" "" \
   "Indian" "" \
   "Pacific" ""
+  if [ $? -ne 0 ]; then
+    tz_setup
+    exit
+  fi
   region="$(cat $response)"
   if [ "$region" = "Africa" ]; then
     menu "Timezone Setup" "Please select your region:" \
@@ -1601,9 +1604,8 @@ user_setup() {
   local t uname fname userpwd1 userpwd2
   # Information prompt.
   message "User Setup" "We will now setup an administrator account for the \
-  main user of the system. This account will be an administrator. If desired, \
-  you can add additional users later by running the command 'sudo adduser' in \
-  a terminal."
+  main user of the system. If desired, you can add additional users later by \
+  running the command 'sudo adduser' in a terminal."
   # Username setup.
   input "User Setup" "Please enter the username of the primary user:"
   if [ $? -ne 0 ]; then
@@ -1715,7 +1717,7 @@ bootloader_setup() {
   if [ "$efisys" = "y" ]; then
     forcemenu "Bootloader" "Please specify how MassOS is being installed:" \
     "Internal" "Installing to an internal hard drive or SSD." \
-    "External" "Installing to an external hard drive, SSD or USB flash drive."
+    "External" "Installing to a portable hard drive, SSD or flash drive."
     if [ $? -ne 0 ]; then
       bootloader_setup
       exit
