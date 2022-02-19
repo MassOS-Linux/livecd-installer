@@ -1672,7 +1672,7 @@ user_setup() {
     exit
   fi
   # Blueman.
-  prompt "If your system supports Bluetooth, the Blueman graphical utility \
+  prompt "Bluetooth" "If your system supports Bluetooth, the Blueman utility \
   and applet can help you manage it in a graphical environment. Would you \
   like Blueman to be autostarted on login?"
   if [ $? -eq 0 ]; then
