@@ -83,22 +83,33 @@ install -m755 livecd-installer iso-workdir/massos-rootfs/usr/bin/livecd-installe
 install -m644 livecd-installer.desktop iso-workdir/massos-rootfs/usr/share/applications/livecd-installer.desktop
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -dm755 /home/massos/Desktop
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -m755 /usr/share/applications/livecd-installer.desktop /home/massos/Desktop/livecd-installer.desktop
-# Install firmware.
-echo "Downloading and installing firmware..."
+# Download firmware.
+echo "Downloading firmware..."
 FW_VER="20220209"
 MVER="20220207"
 SOF_VER="v2.0"
 curl -L https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$FW_VER.tar.xz -o iso-workdir/firmware.tar.xz
 curl -L https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files/archive/microcode-$MVER.tar.gz -o iso-workdir/mcode.tar.gz
 curl -L https://github.com/thesofproject/sof-bin/releases/download/$SOF_VER/sof-bin-$SOF_VER.tar.gz -o iso-workdir/sof.tar.gz
+# Install firmware.
+echo "Installing firmware..."
 mkdir -p iso-workdir/{firmware,mcode,sof}
-tar --no-same-owner -xf iso-workdir/firmware.tar.xz -C iso-workdir/massos-rootfs/usr/lib/firmware --strip-components=1
+tar --no-same-owner -xf iso-workdir/firmware.tar.xz -C iso-workdir/firmware --strip-components=1
 tar --no-same-owner -xf iso-workdir/mcode.tar.gz -C iso-workdir/mcode --strip-components=1
 tar --no-same-owner -xf iso-workdir/sof.tar.gz -C iso-workdir/sof --strip-components=1
+install -d iso-workdir/massos-rootfs/usr/lib/firmware
+pushd iso-workdir/firmware >/dev/null
+patch -sNp1 -i ../../livecd-files/linux-firmware-compression.patch
+./copy-firmware.sh -C "$PWD"/../massos-rootfs/usr/lib/firmware
+install -t "$PWD"/../massos-rootfs/usr/lib/firmware -Dm644 GPL-2 GPL-3 LICENCE* LICENSE* WHENCE
+popd >/dev/null
 install -d iso-workdir/massos-rootfs/usr/lib/firmware/intel-ucode
 install -m644 iso-workdir/mcode/intel-ucode{,-with-caveats}/* iso-workdir/massos-rootfs/usr/lib/firmware/intel-ucode
 pushd iso-workdir/sof >/dev/null
-FW_DEST=$PWD/../massos-rootfs/usr/lib/firmware TOOLS_DEST=$PWD ./install.sh $SOF_VER
+cp -r sof*$SOF_VER "$PWD"/../massos-rootfs/usr/lib/firmware/intel
+ln -sf sof-$SOF_VER "$PWD"/../massos-rootfs/usr/lib/firmware/intel/sof
+ln -sf sof-tplg-$SOF_VER "$PWD"/../massos-rootfs/usr/lib/firmware/intel/sof-tplg
+install -t "$PWD"/../massos-rootfs/usr/lib/firmware/intel/sof -Dm644 LICENCE.Intel LICENCE.NXP Notice.NXP
 popd >/dev/null
 # Create Squashfs image.
 echo "Creating squashfs image..."
