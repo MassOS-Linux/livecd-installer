@@ -382,8 +382,8 @@ install_existing() {
   fi
   # Swap choice.
   prompt "Partition Setup" "Swap is a reserved area on the disk which can be \
-  used to prevent the system from crashing if it runs out of memory. Would \
-  you like to add a swap partition?"
+  used as a RAM backup in case the system runs out of memory. Do you have a \
+  swap partition you want to use?"
   if [ $? -eq 0 ]; then
     menu "Partition Setup" "Please select the partition to use as swap (must \
     differ from the root partition):" $entries
@@ -410,8 +410,8 @@ install_existing() {
     swappar="$(cat $response)"
   fi
   # Final warning.
-  prompt "Partition Setup" "WARNING: Selected partition(s) will be formatted, \
-  any existing data on it/them will be lost. Continue?"
+  prompt "Partition Setup" "WARNING: $rootpar will now be formatted - any \
+  existing data on it will be lost. Continue?"
   if [ $? -ne 0 ]; then
     install_existing
     exit
