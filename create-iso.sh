@@ -85,7 +85,7 @@ chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -dm755 /ho
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -m755 /usr/share/applications/livecd-installer.desktop /home/massos/Desktop/livecd-installer.desktop
 # Download firmware.
 echo "Downloading firmware..."
-FW_VER="20220209"
+FW_VER="20220310"
 MVER="20220207"
 SOF_VER="v2.0"
 curl -L https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$FW_VER.tar.xz -o iso-workdir/firmware.tar.xz
