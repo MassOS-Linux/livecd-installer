@@ -353,11 +353,10 @@ install_existing() {
   root_fs="$(cat $response)"
   # EFI system.
   if [ "$efisys" = "y" ]; then
-    menu "Partition Setup" "We also need a small EFI system partition to \
-    install the bootloader files. It should be a FAT32 (vfat) partition. If \
-    it is being used by another operating system, it can be shared with \
-    MassOS without needing to be re-formatted. Please select the desired \
-    partition:" $entries
+    message "Partition Setup" "A small FAT32/vfat EFI system partition is \
+    required to store the bootloader. If you have one in use by another OS, \
+    MassOS can share it; re-formatting is not needed."
+    menu "Partition Setup" "Please select the desired EFI partition:" $entries
     if [ $? -ne 0 ]; then
       partition_topmenu
       exit
@@ -385,8 +384,7 @@ install_existing() {
   used as a RAM backup in case the system runs out of memory. Do you have a \
   swap partition you want to use?"
   if [ $? -eq 0 ]; then
-    menu "Partition Setup" "Please select the partition to use as swap (must \
-    differ from the root partition):" $entries
+    menu "Partition Setup" "Please select the desired swap partition:" $entries
     if [ $? -ne 0 ]; then
       install_existing
       exit
@@ -1791,8 +1789,7 @@ repair_diskselect() {
     exit
   fi
   # Choose which partition containing the MassOS installation to repair.
-  menu "Repair Menu" "Please select the partition containing the installation \
-  you want to repair:" $entries
+  menu "Repair Menu" "Please select the root partition to work on:" $entries
   if [ $? -ne 0 ]; then
     main_menu
     exit
