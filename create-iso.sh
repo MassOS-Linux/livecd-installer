@@ -85,7 +85,7 @@ chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -dm755 /ho
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -m755 /usr/share/applications/livecd-installer.desktop /home/massos/Desktop/livecd-installer.desktop
 # Download firmware.
 echo "Downloading firmware..."
-FW_VER="20220310"
+FW_VER="20220411"
 MVER="20220207"
 SOF_VER="v2.0"
 curl -L https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$FW_VER.tar.xz -o iso-workdir/firmware.tar.xz
@@ -142,6 +142,7 @@ mkfs.fat -F12 iso-workdir/iso-root/EFI/BOOT/efiboot.img -n "MASSOS_EFI"
 mount -o loop iso-workdir/iso-root/EFI/BOOT/efiboot.img iso-workdir/efitmp
 mkdir -p iso-workdir/efitmp/EFI/BOOT
 cp -a iso-workdir/iso-root/EFI/BOOT/{BOOTX64.EFI,limine.cfg,LICENSE-BOOTX64.txt} iso-workdir/efitmp/EFI/BOOT
+sync
 umount iso-workdir/efitmp
 # Copy additional files.
 cp livecd-files/autorun.ico iso-workdir/iso-root/autorun.ico

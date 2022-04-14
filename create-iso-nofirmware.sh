@@ -114,6 +114,7 @@ mkfs.fat -F12 iso-workdir/iso-root/EFI/BOOT/efiboot.img -n "MASSOS_EFI"
 mount -o loop iso-workdir/iso-root/EFI/BOOT/efiboot.img iso-workdir/efitmp
 mkdir -p iso-workdir/efitmp/EFI/BOOT
 cp -a iso-workdir/iso-root/EFI/BOOT/{BOOTX64.EFI,limine.cfg,LICENSE-BOOTX64.txt} iso-workdir/efitmp/EFI/BOOT
+sync
 umount iso-workdir/efitmp
 # Copy additional files.
 cp livecd-files/autorun.ico iso-workdir/iso-root/autorun.ico
