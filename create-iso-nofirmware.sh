@@ -92,9 +92,9 @@ cd ../..
 echo "Copying kernel..."
 cp iso-workdir/massos-rootfs/boot/vmlinuz* iso-workdir/iso-root/vmlinuz
 echo "Generating initramfs..."
-mass-chroot iso-workdir/massos-rootfs /usr/bin/dracut -q -a dmsquash-live initrd.img "$(ls iso-workdir/massos-rootfs/usr/lib/modules)"
+mass-chroot iso-workdir/massos-rootfs /usr/bin/dracut -q -a dmsquash-live initramfs.img "$(ls iso-workdir/massos-rootfs/usr/lib/modules)"
 echo "Copying initramfs..."
-cp iso-workdir/massos-rootfs/initrd.img iso-workdir/iso-root/initrd.img
+mv iso-workdir/massos-rootfs/initramfs.img iso-workdir/iso-root/initramfs.img
 # Install bootloader files.
 echo "Setting up bootloader..."
 # Legacy BIOS.
@@ -124,7 +124,7 @@ cp LICENSE iso-workdir/iso-root/LICENSE.txt
 cp iso-workdir/syslinux/COPYING iso-workdir/iso-root/isolinux/LICENSE-ISOLINUX.txt
 # Create the ISO image.
 echo "Creating ISO image..."
-xorriso -as mkisofs -iso-level 3 -R -J -max-iso9660-filenames -omit-period -omit-version-number -relaxed-filenames -allow-lowercase -volid "MASSOS" -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e EFI/BOOT/efiboot.img -isohybrid-gpt-basdat -no-emul-boot -isohybrid-mbr iso-workdir/iso-root/isolinux/isohdpfx.bin -o massos-$ver-x86_64-nofirmware.iso iso-workdir/iso-root
+xorrisofs -iso-level 3 -d -J -N -R -max-iso9660-filenames -relaxed-filenames -allow-lowercase -V "MASSOS" -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e EFI/BOOT/efiboot.img -isohybrid-gpt-basdat -no-emul-boot -isohybrid-mbr iso-workdir/iso-root/isolinux/isohdpfx.bin -o massos-$ver-x86_64-nofirmware.iso iso-workdir/iso-root
 # Clean up.
 echo "Cleaning up..."
 rm -rf iso-workdir
