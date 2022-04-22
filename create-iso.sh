@@ -86,8 +86,8 @@ chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -m755 /usr
 # Download firmware.
 echo "Downloading firmware..."
 FW_VER="20220411"
-MVER="20220207"
-SOF_VER="v2.0"
+MVER="20220419"
+SOF_VER="v2.1.1"
 curl -L https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$FW_VER.tar.xz -o iso-workdir/firmware.tar.xz
 curl -L https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files/archive/microcode-$MVER.tar.gz -o iso-workdir/mcode.tar.gz
 curl -L https://github.com/thesofproject/sof-bin/releases/download/$SOF_VER/sof-bin-$SOF_VER.tar.gz -o iso-workdir/sof.tar.gz
