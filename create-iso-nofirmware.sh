@@ -45,7 +45,7 @@ if [ -e "iso-workdir" ]; then
   exit 1
 fi
 # Create directories.
-mkdir -p iso-workdir/{iso-root,massos-rootfs,mnt,squashfs-tmp,syslinux}
+mkdir -p iso-workdir/{iso-root,limine,massos-rootfs,mnt,squashfs-tmp,syslinux}
 mkdir -p iso-workdir/iso-root/EFI/BOOT
 mkdir -p iso-workdir/iso-root/isolinux
 mkdir -p iso-workdir/iso-root/LiveOS
@@ -56,8 +56,8 @@ echo "Downloading SYSLINUX..."
 curl -L https://cdn.kernel.org/pub/linux/utils/boot/syslinux/syslinux-6.03.tar.xz -o iso-workdir/syslinux.tar.xz
 tar --no-same-owner -xf iso-workdir/syslinux.tar.xz -C iso-workdir/syslinux --strip-components=1
 echo "Downloading Limine..."
-curl -L https://raw.githubusercontent.com/limine-bootloader/limine/v2.78.2-binary/BOOTX64.EFI -o iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
-curl -L https://raw.githubusercontent.com/limine-bootloader/limine/v2.78.2-binary/LICENSE.md -o iso-workdir/iso-root/EFI/BOOT/LICENSE-BOOTX64.txt
+curl -L https://github.com/limine-bootloader/limine/archive/v3.4.4-binary/limine-3.4.4-binary.tar.gz -o iso-workdir/limine.tar.gz
+tar --no-same-owner -xf iso-workdir/limine.tar.gz -C iso-workdir/limine --strip-components=1
 # Extract rootfs.
 echo "Extracting rootfs..."
 tar -xpf "$1" -C iso-workdir/massos-rootfs
@@ -65,7 +65,7 @@ ver="$(cat iso-workdir/massos-rootfs/etc/massos-release)"
 # Prepare the live system.
 echo "Preparing the live system..."
 chroot iso-workdir/massos-rootfs /usr/sbin/groupadd -r autologin
-chroot iso-workdir/massos-rootfs /usr/sbin/useradd -c "Live Session User" -G wheel,netdev,lpadmin,autologin -ms /bin/bash massos
+chroot iso-workdir/massos-rootfs /usr/sbin/useradd -c "Live User" -G wheel,netdev,lpadmin,autologin -ms /bin/bash massos
 echo "massos:massos" | chroot iso-workdir/massos-rootfs /usr/sbin/chpasswd -c SHA512
 echo "massos ALL=(ALL) NOPASSWD: ALL" > iso-workdir/massos-rootfs/etc/sudoers.d/live
 cat > iso-workdir/massos-rootfs/etc/polkit-1/rules.d/49-live.rules << "END"
@@ -75,14 +75,11 @@ polkit.addRule(function(action, subject) {
     }
 });
 END
-cp iso-workdir/massos-rootfs/etc/lightdm/lightdm.conf iso-workdir/massos-rootfs/etc/lightdm/lightdm.conf.orig
-sed -i 's/#autologin-user=/autologin-user=massos/' iso-workdir/massos-rootfs/etc/lightdm/lightdm.conf
-sed -i 's/#autologin-user-timeout=0/autologin-user-timeout=0/' iso-workdir/massos-rootfs/etc/lightdm/lightdm.conf
-sed -i 's/#autologin-session=/autologin-session=xfce/' iso-workdir/massos-rootfs/etc/lightdm/lightdm.conf
 install -m755 livecd-installer iso-workdir/massos-rootfs/usr/bin/livecd-installer
 install -m644 livecd-installer.desktop iso-workdir/massos-rootfs/usr/share/applications/livecd-installer.desktop
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -dm755 /home/massos/Desktop
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -m755 /usr/share/applications/livecd-installer.desktop /home/massos/Desktop/livecd-installer.desktop
+. autologin/autologin.sh
 # Create Squashfs image.
 echo "Creating squashfs image..."
 cd iso-workdir/massos-rootfs
@@ -104,12 +101,15 @@ cp iso-workdir/syslinux/bios/com32/lib/libcom32.c32 iso-workdir/iso-root/isolinu
 cp iso-workdir/syslinux/bios/com32/libutil/libutil.c32 iso-workdir/iso-root/isolinux/libutil.c32
 cp iso-workdir/syslinux/bios/com32/menu/vesamenu.c32 iso-workdir/iso-root/isolinux/vesamenu.c32
 cp iso-workdir/syslinux/bios/mbr/isohdpfx.bin iso-workdir/iso-root/isolinux/isohdpfx.bin
+cp iso-workdir/syslinux/COPYING iso-workdir/iso-root/isolinux/LICENSE-ISOLINUX.txt
 cp livecd-files/nofirmware/isolinux.cfg iso-workdir/iso-root/isolinux/isolinux.cfg
 cp livecd-files/splash.png iso-workdir/iso-root/isolinux/splash.png
 # EFI.
-chmod 755 iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
+cp iso-workdir/limine/BOOTX64.EFI iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
+chmod +x iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
+cp iso-workdir/limine/LICENSE.md iso-workdir/iso-root/EFI/BOOT/LICENSE-BOOTX64.txt
 cp livecd-files/nofirmware/limine.cfg iso-workdir/iso-root/EFI/BOOT/limine.cfg
-truncate -s 1M iso-workdir/iso-root/EFI/BOOT/efiboot.img
+truncate -s 512K iso-workdir/iso-root/EFI/BOOT/efiboot.img
 mkfs.fat -F12 iso-workdir/iso-root/EFI/BOOT/efiboot.img -n "MASSOS_EFI"
 mount -o loop iso-workdir/iso-root/EFI/BOOT/efiboot.img iso-workdir/efitmp
 mkdir -p iso-workdir/efitmp/EFI/BOOT
@@ -121,7 +121,6 @@ cp livecd-files/autorun.ico iso-workdir/iso-root/autorun.ico
 cp livecd-files/nofirmware/autorun.inf iso-workdir/iso-root/autorun.inf
 cp livecd-files/README.txt iso-workdir/iso-root/README.txt
 cp LICENSE iso-workdir/iso-root/LICENSE.txt
-cp iso-workdir/syslinux/COPYING iso-workdir/iso-root/isolinux/LICENSE-ISOLINUX.txt
 # Create the ISO image.
 echo "Creating ISO image..."
 xorrisofs -iso-level 3 -d -J -N -R -max-iso9660-filenames -relaxed-filenames -allow-lowercase -V "MASSOS" -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e EFI/BOOT/efiboot.img -isohybrid-gpt-basdat -no-emul-boot -isohybrid-mbr iso-workdir/iso-root/isolinux/isohdpfx.bin -o massos-$ver-x86_64-nofirmware.iso iso-workdir/iso-root
