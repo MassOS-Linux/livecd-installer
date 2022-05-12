@@ -61,7 +61,7 @@ tar --no-same-owner -xf iso-workdir/limine.tar.gz -C iso-workdir/limine --strip-
 # Download firmware.
 echo "Downloading firmware..."
 FW_VER="20220411"
-MVER="20220419"
+MVER="20220510"
 SOF_VER="v2.1.1"
 curl -L https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$FW_VER.tar.xz -o iso-workdir/firmware.tar.xz
 curl -L https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files/archive/microcode-$MVER.tar.gz -o iso-workdir/mcode.tar.gz
