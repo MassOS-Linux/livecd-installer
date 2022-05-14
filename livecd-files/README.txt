@@ -11,6 +11,6 @@ A guide on how to do that can be found at the following link:
 We hope that you enjoy using MassOS.
 
 Copyright and license information about MassOS can be found in the LICENSE.txt
-file. This CD also contains the ISOLINUX and Limine bootloaders. Their licenses
+file. This CD also contains the ISOLINUX and GRUB bootloaders. Their licenses
 can be found at isolinux/LICENSE-ISOLINUX.txt and EFI/BOOT/LICENSE-BOOTX64.txt
 respectively.

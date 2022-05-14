@@ -45,7 +45,7 @@ if [ -e "iso-workdir" ]; then
   exit 1
 fi
 # Create directories.
-mkdir -p iso-workdir/{iso-root,limine,massos-rootfs,mnt,squashfs-tmp,syslinux}
+mkdir -p iso-workdir/{iso-root,massos-rootfs,mnt,squashfs-tmp,syslinux}
 mkdir -p iso-workdir/iso-root/EFI/BOOT
 mkdir -p iso-workdir/iso-root/isolinux
 mkdir -p iso-workdir/iso-root/LiveOS
@@ -55,9 +55,6 @@ mkdir -p iso-workdir/efitmp
 echo "Downloading SYSLINUX..."
 curl -L https://cdn.kernel.org/pub/linux/utils/boot/syslinux/syslinux-6.03.tar.xz -o iso-workdir/syslinux.tar.xz
 tar --no-same-owner -xf iso-workdir/syslinux.tar.xz -C iso-workdir/syslinux --strip-components=1
-echo "Downloading Limine..."
-curl -L https://github.com/limine-bootloader/limine/archive/v3.4.4-binary/limine-3.4.4-binary.tar.gz -o iso-workdir/limine.tar.gz
-tar --no-same-owner -xf iso-workdir/limine.tar.gz -C iso-workdir/limine --strip-components=1
 # Extract rootfs.
 echo "Extracting rootfs..."
 tar -xpf "$1" -C iso-workdir/massos-rootfs
@@ -89,7 +86,7 @@ cd ../..
 echo "Copying kernel..."
 cp iso-workdir/massos-rootfs/boot/vmlinuz* iso-workdir/iso-root/vmlinuz
 echo "Generating initramfs..."
-mass-chroot iso-workdir/massos-rootfs /usr/bin/dracut -q -a dmsquash-live initramfs.img "$(ls iso-workdir/massos-rootfs/usr/lib/modules)"
+mass-chroot iso-workdir/massos-rootfs /usr/bin/dracut -q -a dmsquash-live initramfs.img "$(ls iso-workdir/massos-rootfs/usr/lib/modules)" >/dev/null
 echo "Copying initramfs..."
 mv iso-workdir/massos-rootfs/initramfs.img iso-workdir/iso-root/initramfs.img
 # Install bootloader files.
@@ -105,15 +102,18 @@ cp iso-workdir/syslinux/COPYING iso-workdir/iso-root/isolinux/LICENSE-ISOLINUX.t
 cp livecd-files/nofirmware/isolinux.cfg iso-workdir/iso-root/isolinux/isolinux.cfg
 cp livecd-files/splash.png iso-workdir/iso-root/isolinux/splash.png
 # EFI.
-cp iso-workdir/limine/BOOTX64.EFI iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
+mkdir -p iso-workdir/massos-rootfs/boot/grub
+cp livecd-files/nofirmware/grub.cfg iso-workdir/massos-rootfs/boot/grub/grub.cfg
+mass-chroot iso-workdir/massos-rootfs /usr/bin/grub-mkstandalone -d /usr/lib/grub/x86_64-efi -O x86_64-efi -o BOOTX64.EFI --compress=xz /boot/grub/grub.cfg >/dev/null
+cp iso-workdir/massos-rootfs/BOOTX64.EFI iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
 chmod +x iso-workdir/iso-root/EFI/BOOT/BOOTX64.EFI
-cp iso-workdir/limine/LICENSE.md iso-workdir/iso-root/EFI/BOOT/LICENSE-BOOTX64.txt
-cp livecd-files/nofirmware/limine.cfg iso-workdir/iso-root/EFI/BOOT/limine.cfg
-truncate -s 512K iso-workdir/iso-root/EFI/BOOT/efiboot.img
+cp iso-workdir/massos-rootfs/usr/share/grub/unicode.pf2 iso-workdir/iso-root/unicode.pf2
+cp iso-workdir/massos-rootfs/usr/share/licenses/grub/COPYING iso-workdir/iso-root/EFI/BOOT/LICENSE-BOOTX64.txt
+fallocate -l $(($(du -bc iso-workdir/iso-root/EFI/BOOT/{BOOTX64.EFI,LICENSE-BOOTX64.txt} | tail -n1 | cut -f1) + 80000)) iso-workdir/iso-root/EFI/BOOT/efiboot.img
 mkfs.fat -F12 iso-workdir/iso-root/EFI/BOOT/efiboot.img -n "MASSOS_EFI"
 mount -o loop iso-workdir/iso-root/EFI/BOOT/efiboot.img iso-workdir/efitmp
 mkdir -p iso-workdir/efitmp/EFI/BOOT
-cp -a iso-workdir/iso-root/EFI/BOOT/{BOOTX64.EFI,limine.cfg,LICENSE-BOOTX64.txt} iso-workdir/efitmp/EFI/BOOT
+cp iso-workdir/iso-root/EFI/BOOT/{BOOTX64.EFI,LICENSE-BOOTX64.txt} iso-workdir/efitmp/EFI/BOOT
 sync
 umount iso-workdir/efitmp
 # Copy additional files.
