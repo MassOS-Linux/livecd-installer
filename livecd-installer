@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=27
+VER=28
 
 # Invocation and header.
 inv="$(basename "$0")"
@@ -1875,7 +1875,12 @@ refresh() {
   # Remove live system features.
   userdel -R "$mountdir" -rf massos &>>"$logfile"
   groupdel -R "$mountdir" -f autologin &>>"$logfile"
-  mv "$mountdir"/etc/lightdm/lightdm.conf.orig "$mountdir"/etc/lightdm/lightdm.conf
+  if [ -f "$mountdir"/etc/lightdm/lightdm.conf.orig ]; then
+    mv "$mountdir"/etc/lightdm/lightdm.conf{.orig,}
+  fi
+  if [ -f "$mountdir"/etc/sddm.conf.d/autologin.conf ]; then
+    rm -f "$mountdir"/etc/sddm.conf.d/autologin.conf
+  fi
   rm -f "$mountdir"/etc/polkit-1/rules.d/49-live.rules
   rm -f "$mountdir"/etc/sudoers.d/live
   rm -f "$mountdir"/usr/bin/livecd-installer
