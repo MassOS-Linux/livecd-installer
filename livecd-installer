@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=28
+VER=29
 
 # Invocation and header.
 inv="$(basename "$0")"
@@ -1679,8 +1679,8 @@ user_setup() {
     main_menu
     exit
   fi
-  # Blueman (Xfce only).
-  if [ -e "$mountdir"/usr/share/xsessions/xfce.desktop ]; then
+  # Blueman (Only if installed).
+  if [ -e "$mountdir"/usr/share/blueman/autostart.desktop ]; then
     prompt "Bluetooth" "If your system supports Bluetooth, the Blueman tool \
     and applet can help you graphically manage it. Would you like Blueman to \
     autostart on login?"
