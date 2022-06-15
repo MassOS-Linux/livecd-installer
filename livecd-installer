@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=29
+VER=30
 
 # Invocation and header.
 inv="$(basename "$0")"
@@ -720,6 +720,9 @@ locale_setup() {
   # Generate the locales.
   chroot "$mountdir" /usr/sbin/mklocales | dialog --backtitle "$head" --title \
   "Locale Setup" --progressbox "Generating locales..." 7 60
+  # Set the locale as the default.
+  echo "LANG=$selected_locale" > /etc/locale.conf
+  cp {,"$mountdir"}/etc/locale.conf
   # Set keyboard layout.
   kbd_setup
 }
@@ -983,7 +986,16 @@ kbd_setup() {
     fi
     selected_kbd="$(cat $response)"
   fi
-  echo "KEYMAP=$selected_kbd" > "$mountdir"/etc/vconsole.conf
+  # localectl doesn't work in chroot; run on host and copy config to target.
+  localectl set-keymap "$selected_kbd"
+  cp {,"$mountdir"}/etc/vconsole.conf
+  if [ -e /etc/X11/xorg.conf.d/00-keyboard.conf ]; then
+    cp {,"$mountdir"}/etc/X11/xorg.conf.d/00-keyboard.conf
+  fi
+  message "Keyboard Layout" "Selected keyboard layout can only apply after \
+  rebooting into the new system. If you need it in the live system right now, \
+  please use the GUI settings program."
+  # Move onto timezone setup.
   tz_setup
 }
 
