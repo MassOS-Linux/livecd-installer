@@ -1724,6 +1724,7 @@ grub_run() {
   cat > "$mountdir"/tmp/install-grubrun << "END"
 #!/bin/bash
 set -e
+mkdir -p /run/lock
 echo "33"
 if [ "$efisys" = "y" ]; then
   mountpoint -q /sys/firmware/efi/efivars || (mount -t efivarfs efivarfs /sys/firmware/efi/efivars && touch /tmp/beforemounted)
