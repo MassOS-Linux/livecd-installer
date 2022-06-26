@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=30
+VER=33
 
 # Invocation and header.
 inv="$(basename "$0")"
@@ -498,6 +498,7 @@ begin_installation() {
   dialog --backtitle "$head" --title "Installation" --progressbox "Installing \
   MassOS, please be patient..." 5 78
   sync
+  chmod 755 "$mountdir"
   # Remove live system features.
   userdel -R "$mountdir" -rf massos &>>"$logfile"
   groupdel -R "$mountdir" -f autologin &>>"$logfile"
@@ -1885,6 +1886,8 @@ refresh() {
   unsquashfs -f -ig -q -d "$mountdir" /run/initramfs/live/LiveOS/squashfs.img \
   2>/dev/null | dialog --backtitle "$head" --title "Refresh" --progressbox \
   "Refreshing your MassOS installation, please be patient..." 5 78
+  sync
+  chmod 755 "$mountdir"
   # Remove live system features.
   userdel -R "$mountdir" -rf massos &>>"$logfile"
   groupdel -R "$mountdir" -f autologin &>>"$logfile"
