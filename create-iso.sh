@@ -59,7 +59,7 @@ tar --no-same-owner -xf iso-workdir/syslinux.tar.xz -C iso-workdir/syslinux --st
 echo "Downloading firmware..."
 FW_VER="20220610"
 MVER="20220510"
-SOF_VER="v2.1.1"
+SOF_VER="v2.2"
 curl -L https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$FW_VER.tar.xz -o iso-workdir/firmware.tar.xz
 curl -L https://github.com/intel/Intel-Linux-Processor-Microcode-Data-Files/archive/microcode-$MVER.tar.gz -o iso-workdir/mcode.tar.gz
 curl -L https://github.com/thesofproject/sof-bin/releases/download/$SOF_VER/sof-bin-$SOF_VER.tar.gz -o iso-workdir/sof.tar.gz
