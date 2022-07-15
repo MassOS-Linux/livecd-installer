@@ -1684,6 +1684,7 @@ user_setup() {
     main_menu
     exit
   fi
+  chmod 700 "$mountdir"/home/"$uname"
   # Set the password.
   echo "$uname:$userpwd1" | chpasswd -R "$mountdir" -c SHA512 &>>"$logfile"
   if [ $? -ne 0 ]; then
