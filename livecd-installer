@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=33
+VER=37
 
 # Invocation and header.
 inv="$(basename "$0")"
@@ -504,6 +504,9 @@ begin_installation() {
   groupdel -R "$mountdir" -f autologin &>>"$logfile"
   if [ -f "$mountdir"/etc/lightdm/lightdm.conf.orig ]; then
     mv "$mountdir"/etc/lightdm/lightdm.conf{.orig,}
+  fi
+  if [ -f "$mountdir"/etc/gdm/custom.conf.orig ]; then
+    mv "$mountdir"/etc/gdm/custom.conf{.orig,}
   fi
   if [ -f "$mountdir"/etc/sddm.conf.d/autologin.conf ]; then
     rm -f "$mountdir"/etc/sddm.conf.d/autologin.conf
@@ -1894,6 +1897,9 @@ refresh() {
   groupdel -R "$mountdir" -f autologin &>>"$logfile"
   if [ -f "$mountdir"/etc/lightdm/lightdm.conf.orig ]; then
     mv "$mountdir"/etc/lightdm/lightdm.conf{.orig,}
+  fi
+  if [ -f "$mountdir"/etc/gdm/custom.conf.orig ]; then
+    mv "$mountdir"/etc/gdm/custom.conf{.orig,}
   fi
   if [ -f "$mountdir"/etc/sddm.conf.d/autologin.conf ]; then
     rm -f "$mountdir"/etc/sddm.conf.d/autologin.conf
