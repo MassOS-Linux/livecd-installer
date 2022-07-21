@@ -1,0 +1,4 @@
+[Desktop Entry]
+Type=Application
+Name=Mark livecd-installer.desktop as trusted (chmod 755 is no longer enough)
+Exec=/bin/bash -c 'test ! -e ~/Desktop/livecd-installer.desktop || gio set ~/Desktop/livecd-installer.desktop "metadata::trusted" true'

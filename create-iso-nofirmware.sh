@@ -76,6 +76,7 @@ install -m755 livecd-installer iso-workdir/massos-rootfs/usr/bin/livecd-installe
 install -m644 livecd-installer.desktop iso-workdir/massos-rootfs/usr/share/applications/livecd-installer.desktop
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -dm755 /home/massos/Desktop
 chroot iso-workdir/massos-rootfs /usr/bin/install -o massos -g massos -m755 /usr/share/applications/livecd-installer.desktop /home/massos/Desktop/livecd-installer.desktop
+install -m644 livecd-files/trust-livecd-installer.desktop iso-workdir/massos-rootfs/etc/xdg/autostart/trust-livecd-installer.desktop
 . autologin/autologin.sh
 # Create Squashfs image.
 echo "Creating squashfs image..."

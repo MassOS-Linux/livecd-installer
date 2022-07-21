@@ -16,11 +16,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=37
+VER=40
+
+# Detect MassOS version (for version information only).
+mrel="$(massos-release 2>/dev/null || echo "UNKNOWN")"
 
 # Invocation and header.
 inv="$(basename "$0")"
-head="MassOS Installation Program - Copyright (C) 2022 MassOS Developers."
+head="MassOS Installation Program v$VER -- MassOS $mrel"
 installation_stage=0
 
 # Exit with error function.
@@ -143,8 +146,7 @@ main_menu() {
 }
 
 about() {
-  local MREL="$(massos-release 2>/dev/null || echo "UNKNOWN")"
-  message "About" "MassOS Installation Program v$VER running on $MREL. \
+  message "About" "MassOS Installation Program v$VER running on $mrel. \
   Copyright (C) 2022 MassOS Developers - Licensed under GNU GPLv3+ \
   (see /usr/share/massos/LICENSE)."
   main_menu
@@ -515,6 +517,7 @@ begin_installation() {
   rm -f "$mountdir"/etc/sudoers.d/live
   rm -f "$mountdir"/usr/bin/livecd-installer
   rm -f "$mountdir"/usr/share/applications/livecd-installer.desktop
+  rm -f "$mountdir"/etc/xdg/autostart/trust-livecd-installer.desktop
   # Generate '/etc/fstab'.
   rootuuid="$(blkid -o value -s UUID "$rootpar")"
   if [ "$efisys" = "y" ]; then
@@ -1908,6 +1911,7 @@ refresh() {
   rm -f "$mountdir"/etc/sudoers.d/live
   rm -f "$mountdir"/usr/bin/livecd-installer
   rm -f "$mountdir"/usr/share/applications/livecd-installer.desktop
+  rm -f "$mountdir"/etc/xdg/autostart/trust-livecd-installer.desktop
   # Restore /etc files, preserving new os-release files.
   cp -a "$mountdir"/etc/{lsb-release,massos-release,os-release} "$bakdir"
   cp -a "$bakdir"/etc "$mountdir"
