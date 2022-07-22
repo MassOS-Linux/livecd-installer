@@ -152,9 +152,9 @@ cp livecd-files/README.txt iso-workdir/iso-root/README.txt
 cp LICENSE iso-workdir/iso-root/LICENSE.txt
 # Create the ISO image.
 echo "Creating ISO image..."
-xorrisofs -iso-level 3 -d -J -N -R -max-iso9660-filenames -relaxed-filenames -allow-lowercase -V "MASSOS" -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e EFI/BOOT/efiboot.img -isohybrid-gpt-basdat -no-emul-boot -isohybrid-mbr iso-workdir/iso-root/isolinux/isohdpfx.bin -o massos-$ver-x86_64.iso iso-workdir/iso-root
+xorrisofs -iso-level 3 -d -J -N -R -max-iso9660-filenames -relaxed-filenames -allow-lowercase -V "MASSOS" -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -e EFI/BOOT/efiboot.img -isohybrid-gpt-basdat -no-emul-boot -isohybrid-mbr iso-workdir/iso-root/isolinux/isohdpfx.bin -o "massos-$ver-x86_64-$variant.iso" iso-workdir/iso-root
 # Clean up.
 echo "Cleaning up..."
 rm -rf iso-workdir
 # Finishing message.
-echo "All done! Output image written to massos-$ver-x86_64.iso."
+echo "All done! Output image written to massos-$ver-x86_64-$variant.iso."
