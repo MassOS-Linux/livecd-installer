@@ -510,8 +510,8 @@ begin_installation() {
   if [ -f "$mountdir"/etc/gdm/custom.conf.orig ]; then
     mv "$mountdir"/etc/gdm/custom.conf{.orig,}
   fi
-  if [ -f "$mountdir"/etc/sddm.conf.d/autologin.conf ]; then
-    rm -f "$mountdir"/etc/sddm.conf.d/autologin.conf
+  if [ -f "$mountdir"/etc/sddm.conf.orig ]; then
+    mv "$mountdir"/etc/sddm.conf{.orig,}
   fi
   rm -f "$mountdir"/etc/polkit-1/rules.d/49-live.rules
   rm -f "$mountdir"/etc/sudoers.d/live
@@ -1904,8 +1904,8 @@ refresh() {
   if [ -f "$mountdir"/etc/gdm/custom.conf.orig ]; then
     mv "$mountdir"/etc/gdm/custom.conf{.orig,}
   fi
-  if [ -f "$mountdir"/etc/sddm.conf.d/autologin.conf ]; then
-    rm -f "$mountdir"/etc/sddm.conf.d/autologin.conf
+  if [ -f "$mountdir"/etc/sddm.conf.orig ]; then
+    mv "$mountdir"/etc/sddm.conf{.orig,}
   fi
   rm -f "$mountdir"/etc/polkit-1/rules.d/49-live.rules
   rm -f "$mountdir"/etc/sudoers.d/live
