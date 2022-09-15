@@ -1,6 +1,3 @@
-install -dm755 /etc/sddm.conf.d
-cat > /etc/sddm.conf.d/autologin.conf << "END"
-[Autologin]
-User=massos
-Session=plasma
-END
+cp iso-workdir/massos-rootfs/etc/sddm.conf{,.orig}
+sed -e 's|Session=|Session=plasma|' -e 's|User=|User=massos|' -i iso-workdir/massos-rootfs/etc/sddm.conf
+
