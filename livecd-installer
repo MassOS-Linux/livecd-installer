@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=40
+VER=43
 
 # Detect MassOS version (for version information only).
 mrel="$(massos-release 2>/dev/null || echo "UNKNOWN")"
