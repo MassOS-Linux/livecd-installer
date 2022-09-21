@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=44
+VER=45
 
 # Detect MassOS version (for version information only).
 mrel="$(massos-release 2>/dev/null || echo "UNKNOWN")"
@@ -1590,37 +1590,41 @@ tz_setup() {
 
 root_password() {
   local passwd1 passwd2
-  # Set the root password.
-  password "Root Password" "Please enter a password for the root account:"
-  if [ $? -ne 0 ]; then
-    main_menu
-    exit
-  fi
-  passwd1="$(cat $response)"
-  if [ -z "$passwd1" ]; then
-    message "Error" "The password field must not be left blank."
-    root_password
-    exit
-  fi
-  # And again, to ensure it was typed correctly.
-  password "Root Password" "Please type the same password again to confirm:"
-  if [ $? -ne 0 ]; then
-    root_password
-    exit
-  fi
-  passwd2="$(cat $response)"
-  # Ensure the passwords match.
-  if [ "$passwd1" != "$passwd2" ]; then
-    message "Error" "Your passwords do not match. Please try again."
-    root_password
-    exit
-  fi
-  # Set the password.
-  echo "root:$passwd1" | chpasswd -R "$mountdir" -c SHA512 &>>"$logfile"
-  if [ $? -ne 0 ]; then
-    message "Error" "Failed to set the root password. A log file can be found at $logfile."
-    main_menu
-    exit
+  prompt "Root Account" "For security, root is disabled by default - users can \
+  elevate using 'sudo'. Would you like to enable the root account anyway? If \
+  unsure, answer NO here."
+  if [ $? -eq 0 ]; then
+    # Set the root password.
+    password "Root Password" "Please enter a password for the root account:"
+    if [ $? -ne 0 ]; then
+      main_menu
+      exit
+    fi
+    passwd1="$(cat $response)"
+    if [ -z "$passwd1" ]; then
+      message "Error" "The password field must not be left blank."
+      root_password
+      exit
+    fi
+    # And again, to ensure it was typed correctly.
+    password "Root Password" "Please type the same password again to confirm:"
+    if [ $? -ne 0 ]; then
+      root_password
+      exit
+    fi
+    passwd2="$(cat $response)"
+    # Ensure the passwords match.
+    if [ "$passwd1" != "$passwd2" ]; then
+      message "Error" "Your passwords do not match. Please try again."
+      root_password
+      exit
+    fi
+    # Set the password.
+    echo "root:$passwd1" | chpasswd -R "$mountdir" -c SHA512 &>>"$logfile"
+    if [ $? -ne 0 ]; then
+      message "Error" "Failed to set the root password. The root account will \
+      not be enabled. A log file can be found at $logfile."
+    fi
   fi
   # Go to user setup.
   installation_stage=4
