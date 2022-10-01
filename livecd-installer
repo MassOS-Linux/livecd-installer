@@ -1916,8 +1916,8 @@ refresh() {
   rm -f "$mountdir"/usr/bin/livecd-installer
   rm -f "$mountdir"/usr/share/applications/livecd-installer.desktop
   rm -f "$mountdir"/etc/xdg/autostart/trust-livecd-installer.desktop
-  # Restore /etc files, preserving new os-release files.
-  cp -a "$mountdir"/etc/{lsb-release,massos-release,os-release} "$bakdir"
+  # Restore /etc files, preserving new os-release and iana-etc files.
+  cp -a "$mountdir"/etc/{lsb-release,massos-release,os-release,protocols,services} "$bakdir"
   cp -a "$bakdir"/etc "$mountdir"
   cp -a "$bakdir"/{lsb-release,massos-release,os-release} "$mountdir"/etc
   # Finishing steps.
