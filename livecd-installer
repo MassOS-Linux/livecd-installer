@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Set version (to be incremented on each update/commit).
-VER=45
+VER=47
 
 # Detect MassOS version (for version information only).
 mrel="$(massos-release 2>/dev/null || echo "UNKNOWN")"
@@ -1919,7 +1919,7 @@ refresh() {
   # Restore /etc files, preserving new os-release and iana-etc files.
   cp -a "$mountdir"/etc/{lsb-release,massos-release,os-release,protocols,services} "$bakdir"
   cp -a "$bakdir"/etc "$mountdir"
-  cp -a "$bakdir"/{lsb-release,massos-release,os-release} "$mountdir"/etc
+  cp -a "$bakdir"/{lsb-release,massos-release,os-release,protocols,services} "$mountdir"/etc
   # Finishing steps.
   dialog --backtitle "$head" --title "Refresh" --infobox "Running finishing \
   steps, please be patient (this might take a few minutes)..." 4 60
